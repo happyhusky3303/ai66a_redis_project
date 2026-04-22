@@ -67,21 +67,26 @@ redis.call('ZREMRANGEBYSCORE', key, '-inf', now_ms - window_ms)
 -- 2. count current entries in the window
 local current = redis.call('ZCARD', key)
 
--- 3. blocked?
+-- 3. calculate allowed votes
+local allowed_x = x
 if current + x > max_votes then
+    allowed_x = max_votes - current
+end
+
+if allowed_x <= 0 then
     return 0
 end
 
--- 4. add x new unique members (score = now_ms, member = now_ms:nonce:i)
-for i = 1, x do
+-- 4. add allowed_x new unique members (score = now_ms, member = now_ms:nonce:i)
+for i = 1, allowed_x do
     redis.call('ZADD', key, now_ms, now_ms .. ':' .. nonce .. ':' .. i)
 end
 
 -- 5. refresh TTL
 redis.call('EXPIRE', key, math.ceil(window_ms / 1000) + 1)
 
--- 6. allowed
-return 1
+-- 6. return allowed votes
+return allowed_x
 """
 
 _script_sha: str | None = None
@@ -89,12 +94,12 @@ _script_sha: str | None = None
 
 async def rate_limit_check(
     redis_client: aioredis.Redis, user_id: int, x: int
-) -> bool:
+) -> int:
     """
     Run the sliding-window rate-limit Lua script keyed on user_id (int PK).
 
-    Returns True  → ALLOWED.
-    Returns False → BLOCKED (caller returns HTTP 429).
+    Returns int > 0 → ALLOWED (number of votes permitted).
+    Returns 0       → BLOCKED (caller returns HTTP 429).
     """
     global _script_sha
 
@@ -119,7 +124,7 @@ async def rate_limit_check(
         x,          # ARGV[4]
         nonce,      # ARGV[5]
     )
-    return bool(result)
+    return int(result)
 
 
 # ── cache helpers (keyed on candidate_id int PK) ──────────────────────────────

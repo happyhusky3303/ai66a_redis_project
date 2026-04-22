@@ -1,30 +1,3 @@
-"""
-main.py
-FastAPI entry-point – Voting Backend
-
-Endpoint
-────────
-POST /vote
-
-4-Step flow per request
-───────────────────────
-Step 1 │ Redis Lua rate-limiter
-       │   ✔ allowed  → continue
-       │   ✗ blocked  → HTTP 429
-
-Step 2 │ Redis cache lookup  (key: "votes:<candidate>")
-       │   HIT  → return cached total immediately (no DB call)
-       │   MISS → continue to Step 3
-
-Step 3 │ PostgreSQL
-       │   INSERT new vote row
-       │   SELECT SUM(vote_count) for candidate
-
-Step 4 │ Write-through cache
-       │   Store fresh total in Redis with TTL
-       │   Return result to caller
-"""
-
 import logging
 from contextlib import asynccontextmanager
 
@@ -121,6 +94,7 @@ async def vote_x_times(
     Body: { "x": int, "candidate": str, "user": str }
     """
     x = payload.x
+    original_x = x
     candidate_name = payload.candidate
     username = payload.user
 
@@ -137,8 +111,8 @@ async def vote_x_times(
 
     # ── Step 1: Redis Lua rate-limit ──────────────────────────────────────────
     logger.info("  [Step 1] Checking rate-limit for user_id=%d …", user_id)
-    allowed = await rate_limit_check(redis_client, user_id, x)
-    if not allowed:
+    allowed_x = await rate_limit_check(redis_client, user_id, x)
+    if allowed_x == 0:
         logger.warning("  [Step 1] BLOCKED – user=%s exceeded rate limit", username)
         raise HTTPException(
             status_code=429,
@@ -148,7 +122,12 @@ async def vote_x_times(
                 f"{settings.rate_limit_window_seconds} seconds."
             ),
         )
-    logger.info("  [Step 1] ALLOWED")
+        
+    if allowed_x < x:
+        logger.warning("  [Step 1] PARTIALLY ALLOWED – user=%s requested %d but only %d allowed", username, x, allowed_x)
+        x = allowed_x
+    else:
+        logger.info("  [Step 1] ALLOWED %d votes", x)
 
     # ── Step 2: Redis cache lookup ────────────────────────────────────────────
     logger.info("  [Step 2] Cache lookup for candidate_id=%d …", candidate_id)
@@ -174,7 +153,7 @@ async def vote_x_times(
             votes_cast=x,
             total_votes=updated_total,
             source="cache",
-            message=f"{x} vote(s) recorded for '{candidate_name}'. Total (from cache): {updated_total}.",
+            message=f"Requested {original_x} but only {x} allowed. Total (from cache): {updated_total}." if x < original_x else f"{x} vote(s) recorded for '{candidate_name}'. Total (from cache): {updated_total}.",
         )
 
     # ── Step 3: PostgreSQL – insert + fetch ───────────────────────────────────
@@ -199,7 +178,7 @@ async def vote_x_times(
         votes_cast=x,
         total_votes=db_total,
         source="database",
-        message=f"{x} vote(s) recorded for '{candidate_name}'. Total (from DB): {db_total}.",
+        message=f"Requested {original_x} but only {x} allowed. Total (from DB): {db_total}." if x < original_x else f"{x} vote(s) recorded for '{candidate_name}'. Total (from DB): {db_total}.",
     )
 
 
