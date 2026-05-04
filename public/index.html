@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rate Limiting & API Gateway - Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #333;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    header h1 {
+      color: #667eea;
+      margin-bottom: 10px;
+    }
+
+    .header-info {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      font-size: 14px;
+    }
+
+    .header-info span {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .status-ok { background: #4caf50; color: white; }
+    .status-warning { background: #ff9800; color: white; }
+    .status-error { background: #f44336; color: white; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    .card h2 {
+      color: #667eea;
+      font-size: 18px;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #667eea;
+    }
+
+    .metric {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #eee;
+    }
+
+    .metric:last-child {
+      border-bottom: none;
+    }
+
+    .metric-label {
+      font-weight: 600;
+      color: #666;
+    }
+
+    .metric-value {
+      color: #667eea;
+      font-weight: bold;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #eee;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 10px 0;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4caf50, #45a049);
+      transition: width 0.3s ease;
+    }
+
+    .progress-fill.warning {
+      background: linear-gradient(90deg, #ff9800, #fb8c00);
+    }
+
+    .progress-fill.danger {
+      background: linear-gradient(90deg, #f44336, #e53935);
+    }
+
+    .button {
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-top: 10px;
+      transition: background 0.3s;
+    }
+
+    .button:hover {
+      background: #764ba2;
+    }
+
+    .button.secondary {
+      background: #f44336;
+    }
+
+    .button.secondary:hover {
+      background: #e53935;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #f3f3f3;
+      border-top: 2px solid #667eea;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .leaderboard {
+      margin-top: 20px;
+    }
+
+    .leaderboard-item {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+
+    .rank {
+      min-width: 40px;
+      font-weight: bold;
+      color: #667eea;
+      font-size: 18px;
+    }
+
+    .rank.top3 {
+      font-size: 20px;
+      color: #ffc107;
+      text-shadow: 0 0 2px rgba(0,0,0,0.2);
+    }
+
+    .item-info {
+      flex: 1;
+      margin-left: 15px;
+    }
+
+    .item-title {
+      font-weight: 600;
+      color: #333;
+    }
+
+    .item-score {
+      color: #667eea;
+      font-weight: bold;
+      font-size: 16px;
+    }
+
+    .vote-form {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .vote-form input,
+    .vote-form select {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .vote-form button {
+      background: #4caf50;
+      color: white;
+      border: none;
+      padding: 8px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: background 0.3s;
+    }
+
+    .vote-form button:hover {
+      background: #45a049;
+    }
+
+    .rate-limit-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      margin-top: 10px;
+    }
+
+    .cache-list {
+      margin-top: 15px;
+    }
+
+    .cache-item {
+      padding: 10px;
+      background: #f9f9f9;
+      border-left: 3px solid #667eea;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    .cache-item-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+      font-weight: 600;
+    }
+
+    .cache-hit { color: #4caf50; }
+    .cache-miss { color: #f44336; }
+
+    .simulator {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+      margin-top: 15px;
+    }
+
+    .simulator input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .stat-box {
+      background: white;
+      padding: 10px;
+      border-radius: 4px;
+      text-align: center;
+      border: 1px solid #ddd;
+    }
+
+    .stat-box-value {
+      font-size: 20px;
+      font-weight: bold;
+      color: #667eea;
+    }
+
+    .stat-box-label {
+      font-size: 12px;
+      color: #666;
+      margin-top: 5px;
+    }
+
+    .message {
+      padding: 12px;
+      border-radius: 4px;
+      margin-bottom: 10px;
+      display: none;
+    }
+
+    .message.show {
+      display: block;
+    }
+
+    .message.success {
+      background: #4caf50;
+      color: white;
+    }
+
+    .message.error {
+      background: #f44336;
+      color: white;
+    }
+
+    .message.info {
+      background: #2196f3;
+      color: white;
+    }
+
+    @media (max-width: 768px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header-info {
+        flex-direction: column;
+      }
+
+      .vote-form {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🚀 Rate Limiting & API Gateway Dashboard</h1>
+      <div class="header-info">
+        <span>Status: <span class="status-badge status-ok" id="status">READY</span></span>
+        <span>Users Online: <strong id="usersOnline">0</strong></span>
+        <span>Last Updated: <strong id="lastUpdated">--:--:--</strong></span>
+      </div>
+    </header>
+
+    <div id="message" class="message"></div>
+
+    <div class="grid">
+      <!-- Rate Limit Monitor -->
+      <div class="card">
+        <h2>⚡ Rate Limiting Status</h2>
+        <div id="rateLimitStatus">
+          <div class="metric">
+            <span class="metric-label">Max Requests/60s:</span>
+            <span class="metric-value" id="maxRequests">--</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Requests Used:</span>
+            <span class="metric-value" id="requestsUsed">0/100</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Blocked:</span>
+            <span class="metric-value" id="blocked">0</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressBar" style="width: 0%"></div>
+          </div>
+          <div class="metric">
+            <span class="metric-label">TTL:</span>
+            <span class="metric-value" id="ttl">--</span>
+          </div>
+        </div>
+        <button class="button" onclick="window.userId = prompt('Enter User ID:', window.userId || 'user1'); updateRateLimitStatus();">Update User</button>
+      </div>
+
+      <!-- Cache Inspector -->
+      <div class="card">
+        <h2>💾 Cache Inspector</h2>
+        <div id="cacheStats">
+          <div class="metric">
+            <span class="metric-label">Cache Keys:</span>
+            <span class="metric-value" id="cacheKeyCount">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Hit Rate:</span>
+            <span class="metric-value" id="hitRate">0%</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Total Hits:</span>
+            <span class="metric-value" id="totalHits">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Total Misses:</span>
+            <span class="metric-value" id="totalMisses">0</span>
+          </div>
+        </div>
+        <div class="cache-list" id="cacheList"></div>
+        <button class="button" onclick="updateCacheStats();">Refresh Stats</button>
+      </div>
+
+      <!-- Voting System -->
+      <div class="card">
+        <h2>🗳️ Voting System</h2>
+        <div class="vote-form">
+          <input type="text" id="userId" placeholder="User ID" value="user1">
+          <input type="text" id="itemId" placeholder="Item ID" value="item1">
+          <button onclick="castVote();">Cast Vote</button>
+        </div>
+        <div id="voteStatus" style="margin-top: 10px;"></div>
+      </div>
+
+      <!-- Ranking Leaderboard -->
+      <div class="card">
+        <h2>🏆 Ranking Leaderboard</h2>
+        <div id="leaderboard" class="leaderboard">
+          <div style="text-align: center; color: #999;">
+            <div class="spinner"></div>
+            <div>Loading leaderboard...</div>
+          </div>
+        </div>
+        <button class="button" onclick="updateLeaderboard();">Refresh</button>
+      </div>
+
+      <!-- Request Simulator -->
+      <div class="card">
+        <h2>🎯 Request Spam Simulator</h2>
+        <div class="simulator">
+          <label>Number of Requests:</label>
+          <input type="number" id="requestCount" value="200" min="1" max="500">
+          <button class="button" onclick="startSpamSimulator();">🚀 Send Requests</button>
+          <div class="stats-grid" id="simulatorStats">
+            <div class="stat-box">
+              <div class="stat-box-value" id="simPassed">0</div>
+              <div class="stat-box-label">Passed</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-value" id="simBlocked">0</div>
+              <div class="stat-box-label">Blocked</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-value" id="simProgress">0%</div>
+              <div class="stat-box-label">Progress</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-value" id="simTime">0s</div>
+              <div class="stat-box-label">Time</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- System Health -->
+      <div class="card">
+        <h2>💊 System Health</h2>
+        <div id="systemHealth">
+          <div class="metric">
+            <span class="metric-label">Database:</span>
+            <span class="metric-value status-badge status-ok">OK</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Redis:</span>
+            <span class="metric-value status-badge status-ok">OK</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">MongoDB:</span>
+            <span class="metric-value status-badge status-ok">OK</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Global state
+    let userId = 'user1';
+    let simulationRunning = false;
+
+    // Update timestamp
+    setInterval(() => {
+      const now = new Date();
+      document.getElementById('lastUpdated').textContent = now.toLocaleTimeString();
+    }, 1000);
+
+    // Show message
+    function showMessage(text, type = 'info') {
+      const el = document.getElementById('message');
+      el.textContent = text;
+      el.className = `message show ${type}`;
+      setTimeout(() => el.classList.remove('show'), 3000);
+    }
+
+    // Update rate limit status
+    async function updateRateLimitStatus() {
+      try {
+        const response = await fetch('/api/health', {
+          headers: { 'x-user-id': userId }
+        });
+        const data = await response.json();
+
+        document.getElementById('maxRequests').textContent = '100';
+        document.getElementById('requestsUsed').textContent = `${data.rateLimitInfo?.allowed || 0}/100`;
+        document.getElementById('blocked').textContent = data.rateLimitInfo?.blocked || 0;
+        document.getElementById('ttl').textContent = `${data.rateLimitInfo?.ttl || '--'}s`;
+
+        const percentage = ((data.rateLimitInfo?.allowed || 0) / 100) * 100;
+        const progressBar = document.getElementById('progressBar');
+        progressBar.style.width = percentage + '%';
+        progressBar.className = 'progress-fill' + (percentage > 80 ? ' danger' : percentage > 50 ? ' warning' : '');
+      } catch (error) {
+        console.error('Error updating rate limit:', error);
+      }
+    }
+
+    // Update cache stats
+    async function updateCacheStats() {
+      try {
+        const response = await fetch('/api/cache/stats');
+        const data = await response.json();
+
+        document.getElementById('cacheKeyCount').textContent = data.summary.totalKeys;
+        document.getElementById('hitRate').textContent = data.summary.hitRate;
+        document.getElementById('totalHits').textContent = data.summary.totalHits;
+        document.getElementById('totalMisses').textContent = data.summary.totalMisses;
+
+        // Show top cache items
+        const cacheList = document.getElementById('cacheList');
+        const topCache = data.cacheStats.slice(0, 5);
+        cacheList.innerHTML = topCache.map(item => `
+          <div class="cache-item">
+            <div class="cache-item-header">
+              <span>${item.key}</span>
+              <span>TTL: ${item.ttl ? item.ttl + 's' : 'no expiry'}</span>
+            </div>
+            <div>
+              <span class="cache-hit">Hits: ${item.hits}</span> | 
+              <span class="cache-miss">Misses: ${item.misses}</span>
+            </div>
+          </div>
+        `).join('');
+      } catch (error) {
+        console.error('Error updating cache stats:', error);
+      }
+    }
+
+    // Cast vote
+    async function castVote() {
+      try {
+        const userId = document.getElementById('userId').value || 'user1';
+        const itemId = document.getElementById('itemId').value || 'item1';
+
+        const response = await fetch('/api/vote', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ userId, itemId, voteValue: 1 })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          showMessage(`✓ Vote cast! New score: ${data.vote.newScore}`, 'success');
+          updateLeaderboard();
+        } else {
+          showMessage(`✗ ${data.error}: ${data.message}`, 'error');
+        }
+      } catch (error) {
+        showMessage('Error casting vote: ' + error.message, 'error');
+      }
+    }
+
+    // Update leaderboard
+    async function updateLeaderboard() {
+      try {
+        const response = await fetch('/api/ranking?limit=10');
+        const data = await response.json();
+
+        const leaderboard = document.getElementById('leaderboard');
+        leaderboard.innerHTML = data.items.map((item, idx) => `
+          <div class="leaderboard-item">
+            <div class="rank ${idx < 3 ? 'top3' : ''}">#${item.rank}</div>
+            <div class="item-info">
+              <div class="item-title">${item.title}</div>
+              <div style="font-size: 12px; color: #999;">${item.description || 'No description'}</div>
+            </div>
+            <div class="item-score">${item.score} votes</div>
+          </div>
+        `).join('');
+      } catch (error) {
+        console.error('Error updating leaderboard:', error);
+      }
+    }
+
+    // Spam simulator
+    async function startSpamSimulator() {
+      if (simulationRunning) return;
+
+      simulationRunning = true;
+      const count = parseInt(document.getElementById('requestCount').value) || 200;
+      let passed = 0, blocked = 0;
+      const start = Date.now();
+
+      for (let i = 0; i < count; i++) {
+        try {
+          const response = await fetch('/api/health', {
+            headers: { 'x-user-id': 'spam_user' }
+          });
+
+          if (response.status === 429) {
+            blocked++;
+          } else {
+            passed++;
+          }
+        } catch (error) {
+          blocked++;
+        }
+
+        // Update progress
+        document.getElementById('simPassed').textContent = passed;
+        document.getElementById('simBlocked').textContent = blocked;
+        document.getElementById('simProgress').textContent = Math.round(((i + 1) / count) * 100) + '%';
+        document.getElementById('simTime').textContent = ((Date.now() - start) / 1000).toFixed(1) + 's';
+
+        // Add delay to avoid overloading
+        if (i % 10 === 0) await new Promise(r => setTimeout(r, 10));
+      }
+
+      simulationRunning = false;
+      showMessage(`Simulation complete: ${passed} passed, ${blocked} blocked`, 'info');
+    }
+
+    // Initialize dashboard
+    function initDashboard() {
+      updateRateLimitStatus();
+      updateCacheStats();
+      updateLeaderboard();
+
+      // Refresh every 5 seconds
+      setInterval(() => {
+        updateRateLimitStatus();
+        updateCacheStats();
+      }, 5000);
+    }
+
+    // Start dashboard
+    initDashboard();
+  </script>
+</body>
+</html>

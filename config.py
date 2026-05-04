@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     postgres_user: str = "postgres"
     postgres_password: str = "your_password_here"
 
+    # MongoDB
+    mongodb_uri: str = "mongodb+srv://admin:admin123@cluster0.otugkkk.mongodb.net/?appName=Cluster0"
+    mongodb_db: str = "voting_logs"
+    
     # App-level knobs
     rate_limit_max_votes: int = 10       # max cumulative votes in the window
     rate_limit_window_seconds: int = 60  # sliding-window size (seconds)
