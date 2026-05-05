@@ -26,9 +26,6 @@ if existing_vote then
   is_new_vote = 0
   -- Subtract previous vote
   redis.call('HINCRBY', votes_key, 'total', -tonumber(existing_vote))
-else
-  -- New vote
-  redis.call('SADD', user_key, item_id)
 end
 
 -- Update/set vote

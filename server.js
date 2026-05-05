@@ -12,8 +12,8 @@ dotenv.config();
 
 // Import services
 const { initRedisClient, redisClient } = require('./src/services/redis');
-const { initPostgres, pool } = require('./src/services/postgres');
-const { initMongoDB } = require('./src/services/mongodb');
+const { initPostgres, pool, query } = require('./src/services/postgres');
+const { initMongoDB, getDB, mongoClient } = require('./src/services/mongodb');
 const logger = require('./src/utils/logger');
 
 // Import middleware
@@ -49,13 +49,30 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use('/admin', express.static(path.join(__dirname, 'admin')));
 
 // ─────────────── Routes ──────────────
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+  let postgresStatus = 'disconnected';
+  let mongodbStatus = 'disconnected';
+
+  try {
+    await query('SELECT 1');
+    postgresStatus = 'connected';
+  } catch (error) {
+    logger.debug(`Health check PostgreSQL failed: ${error.message}`);
+  }
+
+  try {
+    getDB();
+    mongodbStatus = 'connected';
+  } catch (error) {
+    logger.debug(`Health check MongoDB failed: ${error.message}`);
+  }
+
   res.json({
     status: 'OK',
     timestamp: new Date().toISOString(),
     redis: redisClient.isOpen ? 'connected' : 'disconnected',
-    postgres: 'connected',
-    mongodb: 'connected'
+    postgres: postgresStatus,
+    mongodb: mongodbStatus
   });
 });
 
@@ -124,6 +141,9 @@ const gracefulShutdown = async () => {
         await pool.end();
         logger.info('PostgreSQL connection closed');
       }
+
+      await mongoClient.quit();
+      logger.info('MongoDB connection closed');
 
       logger.info('Graceful shutdown completed');
       process.exit(0);

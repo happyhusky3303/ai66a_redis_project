@@ -5,6 +5,7 @@ const { query } = require('../services/postgres');
 const logger = require('../utils/logger');
 
 const router = express.Router();
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // ─────────────────── Health Check ──────────────
 router.get('/health', (req, res) => {
@@ -23,7 +24,8 @@ router.get('/health', (req, res) => {
  */
 router.post('/vote', async (req, res, next) => {
   try {
-    const { userId, itemId, voteValue = 1 } = req.body;
+    const { userId, itemId } = req.body;
+    const voteValue = Number.isInteger(req.body.voteValue) ? req.body.voteValue : 1;
 
     // Validation
     if (!userId || !itemId) {
@@ -32,21 +34,32 @@ router.post('/vote', async (req, res, next) => {
       });
     }
 
+    if (!Number.isInteger(voteValue) || voteValue < 1) {
+      return res.status(400).json({ error: 'voteValue must be a positive integer' });
+    }
+
     // Check if item exists
     const itemResult = await query('SELECT id FROM items WHERE id = $1', [itemId]);
     if (itemResult.rows.length === 0) {
       return res.status(404).json({ error: 'Item not found' });
     }
 
-    // Get or create user
-    const userResult = await query(
-      `INSERT INTO users (username, email) VALUES ($1, $2)
-       ON CONFLICT (username) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-       RETURNING id`,
-      [userId, `${userId}@voting.local`]
-    );
+    let userIdFromDB = userId;
 
-    const userIdFromDB = userResult.rows[0].id;
+    if (UUID_REGEX.test(userId)) {
+      const existingUser = await query('SELECT id FROM users WHERE id = $1', [userId]);
+      if (existingUser.rows.length === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+    } else {
+      const userResult = await query(
+        `INSERT INTO users (username, email) VALUES ($1, $2)
+         ON CONFLICT (username) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+         RETURNING id`,
+        [userId, `${userId}@voting.local`]
+      );
+      userIdFromDB = userResult.rows[0].id;
+    }
 
     // Cast vote
     const voteResult = await votingService.vote(userIdFromDB, itemId, voteValue);
@@ -157,7 +170,8 @@ router.get('/cache/stats', async (req, res, next) => {
 router.post('/cache/invalidate/:key', async (req, res, next) => {
   try {
     const { key } = req.params;
-    const deleted = await cacheLayer.delete(`cache:${key}`);
+    const normalizedKey = key.startsWith('cache:') ? key : `cache:${key}`;
+    const deleted = await cacheLayer.delete(normalizedKey);
 
     res.json({
       success: true,
@@ -232,7 +246,7 @@ router.get('/stats/summary', async (req, res, next) => {
 
     // Get cache stats
     const cacheStats = await cacheLayer.getAllCacheStats();
-    const totalCacheHits = cacheStats.reduce((sum, s) => s.hits, 0);
+    const totalCacheHits = cacheStats.reduce((sum, s) => sum + s.hits, 0);
 
     res.json({
       success: true,

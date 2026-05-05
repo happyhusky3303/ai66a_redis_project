@@ -3,15 +3,15 @@
  */
 
 const RATE_LIMIT_DEFAULTS = {
-  MAX_REQUESTS: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
-  WINDOW_SECONDS: parseInt(process.env.RATE_LIMIT_WINDOW_SECONDS) || 60,
+  MAX_REQUESTS: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || process.env.RATE_LIMIT_MAX_VOTES, 10) || 100,
+  WINDOW_SECONDS: parseInt(process.env.RATE_LIMIT_WINDOW_SECONDS, 10) || 60,
   PARTIAL_ACCEPT: process.env.RATE_LIMIT_PARTIAL_ACCEPT === 'true'
 };
 
 const CACHE_TTL = {
-  RANKING: parseInt(process.env.CACHE_TTL_RANKING) || 300,
-  ITEM: parseInt(process.env.CACHE_TTL_ITEM) || 600,
-  USER_VOTES: parseInt(process.env.CACHE_TTL_USER_VOTES) || 120
+  RANKING: parseInt(process.env.CACHE_TTL_RANKING || process.env.CACHE_TTL_SECONDS, 10) || 300,
+  ITEM: parseInt(process.env.CACHE_TTL_ITEM || process.env.CACHE_TTL_SECONDS, 10) || 600,
+  USER_VOTES: parseInt(process.env.CACHE_TTL_USER_VOTES || process.env.CACHE_TTL_SECONDS, 10) || 120
 };
 
 const CACHE_KEYS = {

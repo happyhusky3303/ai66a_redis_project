@@ -62,6 +62,10 @@ const getDB = () => {
 
 const logRequest = async (logData) => {
   try {
+    if (!db) {
+      return;
+    }
+
     const logsCollection = db.collection('request_logs');
     const result = await logsCollection.insertOne({
       ...logData,

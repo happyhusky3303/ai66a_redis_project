@@ -14,9 +14,10 @@ local now = tonumber(ARGV[1])
 local window = tonumber(ARGV[2])
 local max_requests = tonumber(ARGV[3])
 local requested = tonumber(ARGV[4])
+local window_ms = window * 1000
 
 -- Clean up old entries (older than window)
-local min_time = now - window
+local min_time = now - window_ms
 redis.call('ZREMRANGEBYSCORE', key, 0, min_time)
 
 -- Count current requests in window
@@ -33,7 +34,7 @@ if current_count < max_requests then
   
   -- Add allowed requests to sorted set
   for i = 1, allowed do
-    redis.call('ZADD', key, now + (i - 1) * 0.001, now .. ':' .. i)
+    redis.call('ZADD', key, now + (i - 1), now .. ':' .. i .. ':' .. (current_count + i))
   end
 else
   -- All requests are blocked
@@ -43,16 +44,24 @@ end
 
 -- Update stats
 if allowed > 0 or blocked > 0 then
-  redis.call('HSET', stats_key, 
-    'allowed', redis.call('HGET', stats_key, 'allowed') or 0,
-    'blocked', redis.call('HGET', stats_key, 'blocked') or 0)
   redis.call('HINCRBY', stats_key, 'allowed', allowed)
   redis.call('HINCRBY', stats_key, 'blocked', blocked)
+  redis.call('HSET', stats_key, 'last_timestamp', now)
 end
 
 -- Set expiry on the key
 redis.call('EXPIRE', key, window)
 redis.call('EXPIRE', stats_key, window * 2)
 
+-- Estimate reset TTL in seconds from oldest request
+local ttl = window
+if redis.call('ZCARD', key) > 0 then
+  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+  if oldest and oldest[2] then
+    local reset_ms = (tonumber(oldest[2]) + window_ms) - now
+    ttl = math.ceil(math.max(reset_ms, 0) / 1000)
+  end
+end
+
 -- Return results
-return { allowed, blocked, window }
+return { allowed, blocked, ttl }

@@ -25,7 +25,7 @@ class VotingService {
 
       // Invalidate caches
       await cacheLayer.invalidatePattern('cache:item:*');
-      await cacheLayer.invalidatePattern('cache:ranking');
+      await cacheLayer.invalidatePattern('cache:ranking:*');
 
       logger.debug(`Vote cast by user ${userId} on item ${itemId}`);
 
@@ -52,7 +52,7 @@ class VotingService {
         cacheKey,
         async () => {
           const result = await query(
-            `SELECT id, title, description, created_at, updated_at 
+            `SELECT id, title, description, score, created_at, updated_at 
              FROM items WHERE id = $1`,
             [itemId]
           );
@@ -66,7 +66,10 @@ class VotingService {
           // Get vote count from Redis
           const client = getRedisClient();
           const redisVotes = await client.hGet(`votes:${itemId}`, 'total');
-          item.score = parseInt(redisVotes) || 0;
+          item.score = parseInt(redisVotes, 10);
+          if (!Number.isFinite(item.score)) {
+            item.score = parseInt(item.score || result.rows[0].score, 10) || 0;
+          }
 
           // Get rank from leaderboard
           const rank = await client.zRevRank('leaderboard', itemId);
@@ -87,7 +90,7 @@ class VotingService {
    */
   async getTopItems(limit = 10, offset = 0) {
     try {
-      const cacheKey = 'cache:ranking';
+      const cacheKey = `cache:ranking:${limit}:${offset}`;
       const ttl = parseInt(process.env.CACHE_TTL_RANKING) || 300;
 
       return await cacheLayer.getOrSet(
@@ -96,19 +99,31 @@ class VotingService {
           const client = getRedisClient();
 
           // Get top items from leaderboard
-          const topItemIds = await client.zRevRange(
+          const topItems = await client.zRangeWithScores(
             'leaderboard',
             offset,
             offset + limit - 1,
-            { WITHSCORES: true }
+            { REV: true }
           );
 
-          if (topItemIds.length === 0) {
-            return [];
+          if (topItems.length === 0) {
+            const fallbackResult = await query(
+              `SELECT id, title, description, score, created_at, updated_at
+               FROM items
+               ORDER BY score DESC, created_at ASC
+               LIMIT $1 OFFSET $2`,
+              [limit, offset]
+            );
+
+            return fallbackResult.rows.map((item, index) => ({
+              ...item,
+              score: parseInt(item.score, 10) || 0,
+              rank: offset + index + 1
+            }));
           }
 
           // Get item details from PostgreSQL
-          const itemIds = topItemIds.filter((_, i) => i % 2 === 0);
+          const itemIds = topItems.map((entry) => entry.value);
 
           if (itemIds.length === 0) {
             return [];
@@ -123,17 +138,24 @@ class VotingService {
 
           // Map scores back
           const scoreMap = {};
-          for (let i = 0; i < topItemIds.length; i += 2) {
-            scoreMap[topItemIds[i]] = parseInt(topItemIds[i + 1]);
+          for (const entry of topItems) {
+            scoreMap[entry.value] = parseInt(entry.score, 10);
           }
 
-          return result.rows
-            .map((item, index) => ({
-              ...item,
-              score: scoreMap[item.id],
-              rank: offset + index + 1
-            }))
-            .sort((a, b) => b.score - a.score);
+          const itemMap = new Map(result.rows.map(item => [item.id, item]));
+
+          return topItems
+            .map((entry, index) => {
+              const item = itemMap.get(entry.value);
+              if (!item) return null;
+
+              return {
+                ...item,
+                score: scoreMap[item.id] || 0,
+                rank: offset + index + 1
+              };
+            })
+            .filter(Boolean);
         },
         ttl
       );

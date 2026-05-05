@@ -1,7 +1,6 @@
 const dotenv = require('dotenv');
-const { getPool, query } = require('../src/services/postgres');
-const { getRedisClient } = require('../src/services/redis');
-const { v4: uuid } = require('uuid');
+const { initPostgres, query } = require('../src/services/postgres');
+const { initRedisClient, getRedisClient } = require('../src/services/redis');
 const logger = require('../src/utils/logger');
 
 dotenv.config();
@@ -9,6 +8,8 @@ dotenv.config();
 const seedDatabase = async () => {
   try {
     logger.info('Seeding database...');
+    await initPostgres();
+    await initRedisClient();
 
     // Create sample users
     const users = [];
@@ -40,6 +41,16 @@ const seedDatabase = async () => {
     ];
 
     for (const title of itemTitles) {
+      const existingItem = await query(
+        `SELECT id FROM items WHERE title = $1 LIMIT 1`,
+        [title]
+      );
+
+      if (existingItem.rows.length > 0) {
+        items.push(existingItem.rows[0].id);
+        continue;
+      }
+
       const result = await query(
         `INSERT INTO items (title, description) 
          VALUES ($1, $2)
@@ -71,7 +82,12 @@ const seedDatabase = async () => {
         // Update Redis leaderboard
         const votesKey = `votes:${itemId}`;
         await redis.hIncrBy(votesKey, 'total', voteValue);
-        await redis.zAdd('leaderboard', { score: (await redis.hGet(votesKey, 'total')) || 0, member: itemId });
+        const currentTotalRaw = await redis.hGet(votesKey, 'total');
+        const currentTotal = Number.parseInt(currentTotalRaw || '0', 10);
+        await redis.zAdd('leaderboard', [{
+          score: Number.isFinite(currentTotal) ? currentTotal : 0,
+          value: String(itemId)
+        }]);
 
         voteCount++;
       }

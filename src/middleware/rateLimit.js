@@ -1,7 +1,29 @@
-const { getRedisClient } = require('../services/redis');
 const redisScripts = require('../utils/redisScripts');
 const { logRequest } = require('../services/mongodb');
+const { query } = require('../services/postgres');
 const logger = require('../utils/logger');
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const persistRateLimitStats = async (userId, windowSeconds, allowed, blocked) => {
+  if (!UUID_REGEX.test(userId)) {
+    return;
+  }
+
+  const userExists = await query('SELECT 1 FROM users WHERE id = $1', [userId]);
+  if (userExists.rows.length === 0) {
+    return;
+  }
+
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - (windowSeconds * 1000));
+
+  await query(
+    `INSERT INTO rate_limit_stats (user_id, window_start, window_end, requests_allowed, requests_blocked)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [userId, windowStart, now, allowed, blocked]
+  );
+};
 
 const rateLimitMiddleware = async (req, res, next) => {
   try {
@@ -9,9 +31,8 @@ const rateLimitMiddleware = async (req, res, next) => {
     let userId = req.headers['x-user-id'] || req.ip;
     req.userId = userId;
 
-    const maxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100;
+    const maxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || process.env.RATE_LIMIT_MAX_VOTES, 10) || 100;
     const windowSeconds = parseInt(process.env.RATE_LIMIT_WINDOW_SECONDS) || 60;
-    const partialAccept = process.env.RATE_LIMIT_PARTIAL_ACCEPT === 'true';
 
     // Check rate limit using Lua script
     const rateLimitResult = await redisScripts.slidingWindowRateLimit(
@@ -22,6 +43,8 @@ const rateLimitMiddleware = async (req, res, next) => {
     );
 
     req.rateLimitInfo = rateLimitResult;
+    persistRateLimitStats(userId, windowSeconds, rateLimitResult.allowed, rateLimitResult.blocked)
+      .catch(err => logger.debug(`Failed to persist rate limit stats: ${err.message}`));
 
     // If request is blocked
     if (rateLimitResult.allowed === 0) {

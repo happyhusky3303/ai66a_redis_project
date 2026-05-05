@@ -6,9 +6,34 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
+const parseRedisInfo = (infoText) => {
+  if (!infoText || typeof infoText !== 'string') {
+    return {};
+  }
+
+  const parsed = {};
+  for (const line of infoText.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const separatorIndex = trimmed.indexOf(':');
+    if (separatorIndex === -1) continue;
+
+    const key = trimmed.slice(0, separatorIndex);
+    const value = trimmed.slice(separatorIndex + 1);
+    parsed[key] = value;
+  }
+
+  return parsed;
+};
+
 // ─────────────────── Admin Authentication ──────────────
 
 const adminAuth = (req, res, next) => {
+  if (!process.env.ADMIN_API_KEY) {
+    return res.status(503).json({ error: 'Admin API key is not configured on server' });
+  }
+
   const apiKey = req.headers['x-admin-api-key'];
 
   if (apiKey !== process.env.ADMIN_API_KEY) {
@@ -154,12 +179,13 @@ router.delete('/cache/key/:key', async (req, res, next) => {
   try {
     const { key } = req.params;
     const client = getRedisClient();
+    const normalizedKey = key.startsWith('cache:') ? key : `cache:${key}`;
 
-    await client.del(`cache:${key}`);
+    await client.del(normalizedKey);
 
     res.json({
       success: true,
-      message: `Cache key 'cache:${key}' deleted`
+      message: `Cache key '${normalizedKey}' deleted`
     });
   } catch (error) {
     next(error);
@@ -194,8 +220,8 @@ router.get('/system/stats', async (req, res, next) => {
     const client = getRedisClient();
 
     // Get Redis info
-    const redisInfo = await client.info();
-    const memoryInfo = await client.info('memory');
+    const redisInfo = parseRedisInfo(await client.info());
+    const memoryInfo = parseRedisInfo(await client.info('memory'));
 
     // Get database stats
     const usersCount = await query('SELECT COUNT(*) as count FROM users');
@@ -206,8 +232,8 @@ router.get('/system/stats', async (req, res, next) => {
       success: true,
       system: {
         redis: {
-          version: redisInfo.redis_version,
-          usedMemory: memoryInfo.used_memory_human
+          version: redisInfo.redis_version || 'unknown',
+          usedMemory: memoryInfo.used_memory_human || 'unknown'
         },
         database: {
           users: parseInt(usersCount.rows[0].count),

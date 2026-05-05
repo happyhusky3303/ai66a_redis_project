@@ -7,6 +7,10 @@ let pool;
 
 const initPostgres = async () => {
   try {
+    if (pool) {
+      return pool;
+    }
+
     pool = new Pool({
       user: process.env.POSTGRES_USER,
       password: process.env.POSTGRES_PASSWORD,
@@ -61,6 +65,10 @@ const getPool = () => {
 };
 
 const query = async (text, params = []) => {
+  if (!pool) {
+    throw new Error('PostgreSQL pool not initialized. Call initPostgres() first.');
+  }
+
   const client = await pool.connect();
   try {
     return await client.query(text, params);
