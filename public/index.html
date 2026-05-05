@@ -393,7 +393,7 @@
             <span class="metric-value" id="ttl">--</span>
           </div>
         </div>
-        <button class="button" onclick="window.userId = prompt('Enter User ID:', window.userId || 'user1'); updateRateLimitStatus();">Update User</button>
+        <button class="button" onclick="changeUser();">Change User</button>
       </div>
 
       <!-- Cache Inspector -->
@@ -418,15 +418,15 @@
           </div>
         </div>
         <div class="cache-list" id="cacheList"></div>
-        <button class="button" onclick="updateCacheStats();">Refresh Stats</button>
+        <button class="button" onclick="updateCacheStats();">🔄 Refresh Stats</button>
       </div>
 
       <!-- Voting System -->
       <div class="card">
         <h2>🗳️ Voting System</h2>
         <div style="display: flex; gap: 10px; margin-top: 15px;">
-          <input type="text" id="userId" placeholder="User ID" value="user1" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-          <input type="text" id="itemId" placeholder="Item ID" value="item1" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          <input type="text" id="userId" placeholder="User ID" value="user1" style="flex: 1; min-width: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          <input type="text" id="itemId" placeholder="Item ID" value="item1" style="flex: 1; min-width: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
           <button class="button" onclick="castVote();" style="background: #4caf50; white-space: nowrap;">Cast Vote</button>
         </div>
         <div id="voteStatus" style="margin-top: 10px;"></div>
@@ -441,7 +441,7 @@
             <div>Loading leaderboard...</div>
           </div>
         </div>
-        <button class="button" onclick="updateLeaderboard();">Refresh</button>
+        <button class="button" onclick="updateLeaderboard();">🔄 Refresh</button>
       </div>
 
       <!-- Request Simulator -->
@@ -450,7 +450,7 @@
         <div class="simulator">
           <label>Number of Requests:</label>
           <input type="number" id="requestCount" value="200" min="1" max="500">
-          <button class="button" onclick="startSpamSimulator();">🚀 Send Requests</button>
+          <button class="button" id="simButton" onclick="startSpamSimulator();">🚀 Send Requests</button>
           <div class="stats-grid" id="simulatorStats">
             <div class="stat-box">
               <div class="stat-box-value" id="simPassed">0</div>
@@ -494,177 +494,331 @@
   </div>
 
   <script>
-    // Global state
-    let userId = 'user1';
+    // =========================================================================
+    // Global Configuration
+    // =========================================================================
+    let userId = localStorage.getItem('userId') || 'user1';
     let simulationRunning = false;
+    const API_BASE = window.location.origin;
 
-    // Update timestamp
+    // Update timestamp every second
     setInterval(() => {
       const now = new Date();
       document.getElementById('lastUpdated').textContent = now.toLocaleTimeString();
     }, 1000);
 
-    // Show message
+    // =========================================================================
+    // Message Handling
+    // =========================================================================
     function showMessage(text, type = 'info') {
       const el = document.getElementById('message');
       el.textContent = text;
       el.className = `message show ${type}`;
-      setTimeout(() => el.classList.remove('show'), 3000);
+      setTimeout(() => el.classList.remove('show'), 4000);
+      console.log(`[${type.toUpperCase()}] ${text}`);
     }
 
-    // Update rate limit status
+    // =========================================================================
+    // User Management
+    // =========================================================================
+    function changeUser() {
+      const newUserId = prompt('Enter User ID:', userId) || userId;
+      userId = newUserId;
+      localStorage.setItem('userId', userId);
+      updateRateLimitStatus();
+      showMessage(`User changed to: ${userId}`, 'info');
+    }
+
+    // =========================================================================
+    // Rate Limit Status
+    // =========================================================================
     async function updateRateLimitStatus() {
       try {
-        const response = await fetch('/api/health', {
+        const response = await fetch(`${API_BASE}/api/health`, {
           headers: { 'x-user-id': userId }
         });
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
         const data = await response.json();
 
         document.getElementById('maxRequests').textContent = '100';
-        document.getElementById('requestsUsed').textContent = `${data.rateLimitInfo?.allowed || 0}/100`;
-        document.getElementById('blocked').textContent = data.rateLimitInfo?.blocked || 0;
-        document.getElementById('ttl').textContent = `${data.rateLimitInfo?.ttl || '--'}s`;
+        document.getElementById('requestsUsed').textContent = 
+          `${data.rateLimitInfo?.allowed || 0}/100`;
+        document.getElementById('blocked').textContent = 
+          data.rateLimitInfo?.blocked || 0;
+        document.getElementById('ttl').textContent = 
+          `${data.rateLimitInfo?.ttl || '--'}s`;
 
-        const percentage = ((data.rateLimitInfo?.allowed || 0) / 100) * 100;
+        const percentage = Math.min(((data.rateLimitInfo?.allowed || 0) / 100) * 100, 100);
         const progressBar = document.getElementById('progressBar');
         progressBar.style.width = percentage + '%';
-        progressBar.className = 'progress-fill' + (percentage > 80 ? ' danger' : percentage > 50 ? ' warning' : '');
+        progressBar.className = 'progress-fill' + 
+          (percentage > 80 ? ' danger' : percentage > 50 ? ' warning' : '');
+
+        updateSystemHealth(data);
       } catch (error) {
-        console.error('Error updating rate limit:', error);
+        console.error('Rate limit update error:', error);
+        document.getElementById('status').className = 'status-badge status-error';
+        document.getElementById('status').textContent = 'ERROR';
       }
     }
 
-    // Update cache stats
+    // =========================================================================
+    // Cache Statistics
+    // =========================================================================
     async function updateCacheStats() {
       try {
-        const response = await fetch('/api/cache/stats');
+        const response = await fetch(`${API_BASE}/api/cache/stats`);
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
         const data = await response.json();
 
-        document.getElementById('cacheKeyCount').textContent = data.summary.totalKeys;
-        document.getElementById('hitRate').textContent = data.summary.hitRate;
-        document.getElementById('totalHits').textContent = data.summary.totalHits;
-        document.getElementById('totalMisses').textContent = data.summary.totalMisses;
+        if (!data.success) throw new Error(data.error || 'Unknown error');
 
-        // Show top cache items
+        const summary = data.summary || {};
+        document.getElementById('cacheKeyCount').textContent = 
+          summary.totalKeys || 0;
+        document.getElementById('hitRate').textContent = 
+          summary.hitRate || '0.00%';
+        document.getElementById('totalHits').textContent = 
+          summary.totalHits || 0;
+        document.getElementById('totalMisses').textContent = 
+          summary.totalMisses || 0;
+
         const cacheList = document.getElementById('cacheList');
-        const topCache = data.cacheStats.slice(0, 5);
-        cacheList.innerHTML = topCache.map(item => `
-          <div class="cache-item">
-            <div class="cache-item-header">
-              <span>${item.key}</span>
-              <span>TTL: ${item.ttl ? item.ttl + 's' : 'no expiry'}</span>
+        const stats = data.cacheStats || [];
+
+        if (stats.length === 0) {
+          cacheList.innerHTML = '<div class="empty-state">No cache data</div>';
+        } else {
+          cacheList.innerHTML = stats.slice(0, 5).map(item => `
+            <div class="cache-item">
+              <div class="cache-item-header">
+                <span>${item.key || 'unknown'}</span>
+                <span>TTL: ${item.ttl ? item.ttl + 's' : 'no expiry'}</span>
+              </div>
+              <div>
+                <span class="cache-hit">Hits: ${item.hits || 0}</span> | 
+                <span class="cache-miss">Misses: ${item.misses || 0}</span>
+              </div>
             </div>
-            <div>
-              <span class="cache-hit">Hits: ${item.hits}</span> | 
-              <span class="cache-miss">Misses: ${item.misses}</span>
-            </div>
-          </div>
-        `).join('');
+          `).join('');
+        }
       } catch (error) {
-        console.error('Error updating cache stats:', error);
+        console.error('Cache stats error:', error);
       }
     }
 
-    // Cast vote
+    // =========================================================================
+    // Voting System
+    // =========================================================================
     async function castVote() {
       try {
-        const userId = document.getElementById('userId').value || 'user1';
-        const itemId = document.getElementById('itemId').value || 'item1';
+        const voteUserId = document.getElementById('userId').value || 'user1';
+        const voteItemId = document.getElementById('itemId').value || 'item1';
 
-        const response = await fetch('/api/vote', {
+        if (!voteUserId.trim() || !voteItemId.trim()) {
+          showMessage('User ID and Item ID are required', 'error');
+          return;
+        }
+
+        const response = await fetch(`${API_BASE}/api/vote`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ userId, itemId, voteValue: 1 })
+          body: JSON.stringify({
+            userId: voteUserId,
+            itemId: voteItemId,
+            voteValue: 1
+          })
         });
 
         const data = await response.json();
 
-        if (data.success) {
-          showMessage(`✓ Vote cast! New score: ${data.vote.newScore}`, 'success');
-          updateLeaderboard();
-        } else {
-          showMessage(`✗ ${data.error}: ${data.message}`, 'error');
+        if (!response.ok || !data.success) {
+          showMessage(`Vote failed: ${data.error || 'Unknown error'}`, 'error');
+          return;
         }
+
+        showMessage(`✓ Vote cast! New score: ${data.vote?.newScore || 'N/A'}`, 'success');
+        await updateLeaderboard();
+        await updateCacheStats();
       } catch (error) {
+        console.error('Vote error:', error);
         showMessage('Error casting vote: ' + error.message, 'error');
       }
     }
 
-    // Update leaderboard
+    // =========================================================================
+    // Leaderboard
+    // =========================================================================
     async function updateLeaderboard() {
       try {
-        const response = await fetch('/api/ranking?limit=10');
+        const response = await fetch(`${API_BASE}/api/ranking?limit=10`);
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
         const data = await response.json();
 
+        if (!data.success) throw new Error(data.error || 'Unknown error');
+
         const leaderboard = document.getElementById('leaderboard');
-        leaderboard.innerHTML = data.items.map((item, idx) => `
-          <div class="leaderboard-item">
-            <div class="rank ${idx < 3 ? 'top3' : ''}">#${item.rank}</div>
-            <div class="item-info">
-              <div class="item-title">${item.title}</div>
-              <div style="font-size: 12px; color: #999;">${item.description || 'No description'}</div>
+        const items = data.items || [];
+
+        if (items.length === 0) {
+          leaderboard.innerHTML = '<div class="empty-state">No items in leaderboard</div>';
+        } else {
+          leaderboard.innerHTML = items.map((item, idx) => `
+            <div class="leaderboard-item">
+              <div class="rank ${idx < 3 ? 'top3' : ''}">#${idx + 1}</div>
+              <div class="item-info">
+                <div class="item-title">${item.title || 'Unknown'}</div>
+                <div style="font-size: 12px; color: #999;">
+                  ${item.description || 'No description'}
+                </div>
+              </div>
+              <div class="item-score">${item.score || 0} votes</div>
             </div>
-            <div class="item-score">${item.score} votes</div>
-          </div>
-        `).join('');
+          `).join('');
+        }
       } catch (error) {
-        console.error('Error updating leaderboard:', error);
+        console.error('Leaderboard error:', error);
+        const leaderboard = document.getElementById('leaderboard');
+        leaderboard.innerHTML = `<div class="empty-state" style="color: #f44336;">
+          Failed to load leaderboard
+        </div>`;
       }
     }
 
-    // Spam simulator
+    // =========================================================================
+    // Request Spam Simulator
+    // =========================================================================
     async function startSpamSimulator() {
-      if (simulationRunning) return;
+      if (simulationRunning) {
+        showMessage('Simulation already running', 'warning');
+        return;
+      }
 
       simulationRunning = true;
+      const button = document.getElementById('simButton');
+      button.disabled = true;
+
       const count = parseInt(document.getElementById('requestCount').value) || 200;
       let passed = 0, blocked = 0;
       const start = Date.now();
 
-      for (let i = 0; i < count; i++) {
-        try {
-          const response = await fetch('/api/health', {
-            headers: { 'x-user-id': 'spam_user' }
-          });
+      try {
+        for (let i = 0; i < count; i++) {
+          try {
+            const response = await fetch(`${API_BASE}/api/health`, {
+              headers: { 'x-user-id': 'spam_user' }
+            });
 
-          if (response.status === 429) {
+            if (response.status === 429) {
+              blocked++;
+            } else if (response.ok) {
+              passed++;
+            } else {
+              blocked++;
+            }
+          } catch (error) {
             blocked++;
-          } else {
-            passed++;
           }
-        } catch (error) {
-          blocked++;
+
+          // Update progress
+          document.getElementById('simPassed').textContent = passed;
+          document.getElementById('simBlocked').textContent = blocked;
+          document.getElementById('simProgress').textContent = 
+            Math.round(((i + 1) / count) * 100) + '%';
+          document.getElementById('simTime').textContent = 
+            ((Date.now() - start) / 1000).toFixed(1) + 's';
+
+          // Add delay to avoid overloading
+          if (i % 20 === 0) await new Promise(r => setTimeout(r, 50));
         }
 
-        // Update progress
-        document.getElementById('simPassed').textContent = passed;
-        document.getElementById('simBlocked').textContent = blocked;
-        document.getElementById('simProgress').textContent = Math.round(((i + 1) / count) * 100) + '%';
-        document.getElementById('simTime').textContent = ((Date.now() - start) / 1000).toFixed(1) + 's';
+        showMessage(
+          `✓ Simulation complete: ${passed} passed, ${blocked} blocked`,
+          'success'
+        );
+      } catch (error) {
+        console.error('Simulation error:', error);
+        showMessage('Simulation error: ' + error.message, 'error');
+      } finally {
+        simulationRunning = false;
+        button.disabled = false;
+      }
+    }
 
-        // Add delay to avoid overloading
-        if (i % 10 === 0) await new Promise(r => setTimeout(r, 10));
+    // =========================================================================
+    // System Health Check
+    // =========================================================================
+    function updateSystemHealth(healthData) {
+      const data = healthData || {};
+
+      const dbStatus = data.postgres === 'connected' ? 'status-ok' : 'status-error';
+      const redisStatus = data.redis === 'connected' ? 'status-ok' : 'status-error';
+      const mongoStatus = data.mongodb === 'connected' ? 'status-ok' : 'status-error';
+
+      document.getElementById('dbStatus').className = 
+        `status-badge ${dbStatus}`;
+      document.getElementById('dbStatus').textContent = 
+        data.postgres === 'connected' ? 'OK' : 'OFFLINE';
+
+      document.getElementById('redisStatus').className = 
+        `status-badge ${redisStatus}`;
+      document.getElementById('redisStatus').textContent = 
+        data.redis === 'connected' ? 'OK' : 'OFFLINE';
+
+      document.getElementById('mongodbStatus').className = 
+        `status-badge ${mongoStatus}`;
+      document.getElementById('mongodbStatus').textContent = 
+        data.mongodb === 'connected' ? 'OK' : 'OFFLINE';
+    }
+
+    // =========================================================================
+    // Auto-refresh: Update dashboard every 5 seconds
+    // =========================================================================
+    async function autoRefresh() {
+      try {
+        await Promise.all([
+          updateRateLimitStatus(),
+          updateCacheStats(),
+          updateLeaderboard()
+        ]);
+      } catch (error) {
+        console.error('Auto-refresh error:', error);
+      }
+    }
+
+    // =========================================================================
+    // Initialize Dashboard
+    // =========================================================================
+    async function initDashboard() {
+      console.log('🚀 Initializing dashboard...');
+      
+      try {
+        await autoRefresh();
+        showMessage(`Welcome! User: ${userId}`, 'success');
+      } catch (error) {
+        console.error('Initialization error:', error);
+        showMessage('Failed to initialize dashboard', 'error');
       }
 
-      simulationRunning = false;
-      showMessage(`Simulation complete: ${passed} passed, ${blocked} blocked`, 'info');
+      // Setup auto-refresh every 5 seconds
+      setInterval(autoRefresh, 5000);
     }
 
-    // Initialize dashboard
-    function initDashboard() {
-      updateRateLimitStatus();
-      updateCacheStats();
-      updateLeaderboard();
+    // Start on page load
+    window.addEventListener('load', initDashboard);
 
-      // Refresh every 5 seconds
-      setInterval(() => {
-        updateRateLimitStatus();
-        updateCacheStats();
-      }, 5000);
+    // Also try to start immediately in case load event already fired
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initDashboard);
+    } else {
+      setTimeout(initDashboard, 100);
     }
-
-    // Start dashboard
-    initDashboard();
   </script>
 </body>
 </html>
