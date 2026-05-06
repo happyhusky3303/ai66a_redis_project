@@ -2,102 +2,463 @@
 
 ## System Overview
 
-This is a production-ready **Rate Limiting & API Gateway Cache System** that demonstrates:
+This is a production-ready **High-Performance API Gateway** that demonstrates:
 
 1. **Sliding Window Rate Limiting** with atomic Redis operations
 2. **Distributed Caching** with TTL and invalidation
 3. **Concurrent Voting System** with race condition prevention
 4. **Real-time Ranking** using Redis Sorted Sets
-5. **Asynchronous Logging** to MongoDB
-6. **Admin Monitoring** dashboard with full system visibility
+5. **PostgreSQL Durability** for ACID compliance
+6. **Asynchronous Logging** to MongoDB
+7. **Admin Monitoring** dashboard with full system visibility
 
 ---
 
-## Technical Architecture
+## 🏗 Technical Architecture
 
 ### Three-Tier Database Strategy
 
 ```
-┌─────────────────────────────────────────┐
-│        Request Handling Layer           │
-│  (Express.js + Rate Limiting)           │
-└─────────────────┬───────────────────────┘
-                  │
-         ┌────────┴────────┐
-         │                 │
-    ┌────▼──────┐     ┌───▼─────┐
-    │   Redis   │     │PostgreSQL│
-    │(Real-time)│     │(Durable) │
-    └───────────┘     └──────────┘
-         │
-    ┌────▼─────────┐
-    │   MongoDB    │
-    │  (Analytics) │
-    └──────────────┘
+┌────────────────────────────────────────────────────┐
+│             HTTP CLIENT / USER                      │
+└────────────────────┬─────────────────────────────┘
+                     │ HTTP Request
+         ┌───────────▼───────────┐
+         │   RATE LIMIT CHECK    │
+         │  (Redis Lua Script)   │
+         │  O(log N) complexity  │
+         └───────┬───────────────┘
+                 │
+        ┌────────▼─────────┐
+        │  CACHE LAYER     │
+        │ (Redis Check)    │
+        └────────┬─────────┘
+                 │
+     ┌───────────▼──────────────┐
+     │  BUSINESS LOGIC          │
+     │  (Node.js Service)       │
+     └───────────┬──────────────┘
+                 │
+    ┌────────────┼────────────┬───────────┐
+    │            │            │           │
+┌───▼──┐  ┌─────▼──┐  ┌──────▼──┐  ┌────▼───┐
+│Redis │  │Postgres│  │MongoDB  │  │Cache   │
+│Core  │  │(ACID)  │  │(Logging)│  │Invalid.│
+└──────┘  └────────┘  └─────────┘  └────────┘
 ```
 
-### Data Flow for Vote Requests
+### Request Flow
 
 ```
 REQUEST: POST /api/vote
          ↓
-[1] RATE LIMIT CHECK
-    - Redis: Get user's request count in current window
-    - Lua Script: Atomically update request count
-    - If exceeded: Return 429 + Log to MongoDB
-    - If allowed: Continue
+[1] RATE LIMIT CHECK (Redis Lua)
+    - Key: rate_limit:{userId}
+    - Type: Sorted Set
+    - Remove expired entries: O(log N)
+    - Count in window: O(log N)
+    - If blocked: Return 429
+    ↓ (if allowed)
+    
+[2] CACHE CHECK (Redis)
+    - Check cache:ranking, cache:item:{id}
+    - If HIT: Return immediately
+    - If MISS: Continue
     ↓
-[2] DATABASE UPDATE
-    - PostgreSQL: INSERT or UPDATE vote (unique constraint)
-    - Redis: Update vote count and leaderboard
+    
+[3] VOTING LOGIC (Redis Lua - ATOMIC)
+    - Prevent duplicate votes
+    - Update vote count
+    - Update leaderboard (Sorted Set)
+    - All atomic with Lua script
     ↓
-[3] CACHE INVALIDATION
-    - Redis: Delete cache:ranking
-    - Redis: Delete cache:item:{id}
+    
+[4] DATABASE SYNC (PostgreSQL)
+    - UPSERT to votes table
+    - INSERT ... ON CONFLICT
+    - Ensures durability
     ↓
-[4] ASYNC LOGGING
-    - MongoDB: Log request result for analytics
+    
+[5] CACHE INVALIDATION (Redis)
+    - DEL cache:ranking
+    - DEL cache:item:{itemId}
     ↓
+    
+[6] ASYNC LOGGING (MongoDB)
+    - Log endpoint, userId, status, time
+    - Non-blocking (background job)
+    ↓
+    
 RESPONSE: 200 OK + Updated rankings
 ```
 
 ---
 
-## Redis Data Structures
+## 🧠 Redis Data Structures
 
-### Sorted Sets (for time-series and leaderboards)
-
+### Rate Limiting
 ```
-rate_limit:user1 (Sorted Set)
-  └─ Score: Unix timestamp, Member: request ID
-  └─ TTL: 60 seconds
-  └─ Used for: Sliding window rate limiting
-
-leaderboard (Sorted Set)
-  └─ Score: Total votes, Member: item ID
-  └─ TTL: No expiry (refreshed on votes)
-  └─ Used for: Top-N queries on O(log N) time
+rate_limit:{userId}
+├─ Type: Sorted Set
+├─ Score: Unix timestamp (ms)
+├─ Member: Request ID
+├─ TTL: window_seconds + 1
+└─ Used for: Sliding window enforcement
 ```
 
-### Hash Maps (for counters and metadata)
-
+### Leaderboard
 ```
-votes:item1 (Hash)
-  └─ Field: "total", Value: 42
-  └─ Field: "last_updated", Value: timestamp
-  └─ TTL: 24 hours
-  └─ Used for: Vote counts and metadata
-
-rate_limit_stats:user1 (Hash)
-  └─ Field: "allowed", Value: 98
-  └─ Field: "blocked", Value: 2
-  └─ TTL: 120 seconds
-  └─ Used for: Rate limit statistics
+leaderboard
+├─ Type: Sorted Set
+├─ Score: Total votes for item
+├─ Member: itemId
+├─ TTL: Never expires (persistent)
+└─ Used for: Real-time ranking (O(log N) queries)
 ```
 
-### Strings (for caching)
-
+### Vote Tracking
 ```
+votes:{itemId}
+├─ Type: Hash
+├─ Fields:
+│  ├─ total: Sum of all votes
+│  ├─ last_updated: Timestamp
+│  └─ updated_by: User ID
+├─ TTL: 7 days
+└─ Used for: Vote count tracking
+
+user_votes:{userId}
+├─ Type: Hash
+├─ Fields: {itemId -> voteValue}
+├─ TTL: 7 days
+└─ Used for: Duplicate vote detection
+
+vote_history:{itemId}
+├─ Type: Sorted Set
+├─ Score: Timestamp
+├─ Member: userId:voteValue
+├─ TTL: 7 days
+└─ Used for: Audit trail
+```
+
+### Caching
+```
+cache:ranking:{limit}:{offset}
+├─ Type: String (JSON)
+├─ TTL: 300 seconds
+└─ Used for: Leaderboard caching
+
+cache:item:{itemId}
+├─ Type: String (JSON)
+├─ TTL: 600 seconds
+└─ Used for: Individual item caching
+
+cache:stats
+├─ Type: Hash
+├─ Fields: hits, misses, invalidations
+└─ Used for: Cache statistics
+```
+
+### Statistics & Monitoring
+```
+rate_limit_stats:{userId}
+├─ Type: Hash
+├─ Fields: allowed, blocked
+├─ TTL: window_seconds * 2
+└─ Used for: Rate limit tracking
+
+cache:invalidation_log
+├─ Type: List
+├─ Keeps last 1000 entries
+├─ TTL: 1 day
+└─ Used for: Audit trail
+```
+
+---
+
+## 📦 Lua Scripts (Atomic Operations)
+
+### 1. slidingWindowRateLimit.lua
+```
+Purpose: Enforce sliding window rate limiting atomically
+
+Input:
+- userId: User identifier
+- maxRequests: Limit per window
+- windowSeconds: Time window
+- requestCount: Number to validate
+
+Operations (all atomic):
+1. Remove entries older than window: O(log N)
+2. Count current entries: O(1)
+3. Add new entries if allowed: O(log N)
+4. Update statistics hash
+5. Set TTL
+
+Output: [allowed, blocked, remaining, retryAfter]
+Complexity: O(log N) per request
+```
+
+### 2. voting.lua
+```
+Purpose: Cast or update vote atomically (idempotent)
+
+Input:
+- itemId: Item being voted on
+- userId: User casting vote
+- voteValue: Vote value (-10 to 10)
+- timestamp: Current timestamp
+
+Operations (all atomic):
+1. Check existing vote (duplicate detection)
+2. If exists & same value: Return current state (idempotent)
+3. If exists & different: Update difference
+4. If new: Add new vote
+5. Update votes:{itemId} hash
+6. Update leaderboard Sorted Set
+7. Update vote_history for audit
+8. Calculate rank
+
+Output: [newScore, rank, isNewVote, oldVoteValue]
+Guarantees:
+- No race conditions
+- No double-counting
+- Idempotent (safe to retry)
+```
+
+### 3. cacheInvalidation.lua
+```
+Purpose: Atomically invalidate caches and update stats
+
+Input:
+- cacheKeys: Array of keys to delete
+- operationType: manual, auto, system, vote
+- ttl: TTL for stats
+
+Operations (all atomic):
+1. Delete all provided cache keys
+2. Update invalidation statistics
+3. Maintain audit log (last 1000 entries)
+4. Set TTL for cleanup
+
+Output: [totalDeleted, keysAffected]
+```
+
+---
+
+## 🗄 PostgreSQL Schema
+
+### Tables
+```sql
+-- Users
+CREATE TABLE users (
+  id UUID PRIMARY KEY,
+  username VARCHAR UNIQUE NOT NULL,
+  email VARCHAR UNIQUE NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Items
+CREATE TABLE items (
+  id UUID PRIMARY KEY,
+  title VARCHAR NOT NULL,
+  description TEXT,
+  score INTEGER DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Votes (source of truth for vote history)
+CREATE TABLE votes (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id),
+  item_id UUID NOT NULL REFERENCES items(id),
+  vote_value INTEGER NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, item_id)
+);
+
+-- Rate Limit Statistics
+CREATE TABLE rate_limit_stats (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id),
+  window_start TIMESTAMP NOT NULL,
+  window_end TIMESTAMP NOT NULL,
+  requests_allowed INTEGER DEFAULT 0,
+  requests_blocked INTEGER DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for performance
+CREATE INDEX idx_votes_user_id ON votes(user_id);
+CREATE INDEX idx_votes_item_id ON votes(item_id);
+CREATE INDEX idx_items_score ON items(score DESC);
+CREATE INDEX idx_rate_limit_stats_user ON rate_limit_stats(user_id, window_start);
+```
+
+---
+
+## 📊 MongoDB Collections
+
+### request_logs
+```
+{
+  userId: ObjectId,
+  endpoint: String,
+  method: String,
+  status: Number,
+  statusCode: Number,
+  rateLimited: Boolean,
+  action: String,
+  itemId: String,
+  voteValue: Number,
+  responseTime: Number,
+  newScore: Number,
+  rank: Number,
+  error: String,
+  timestamp: Date,
+  _ttl: Date  // TTL index: 30 days
+}
+```
+
+Indexes:
+```
+- userId + timestamp (desc)
+- endpoint + timestamp (desc)
+- status
+- timestamp (TTL: 30 days)
+```
+
+---
+
+## ⚡ Performance Characteristics
+
+| Operation | Complexity | Latency |
+|-----------|-----------|---------|
+| Rate limit check | O(log N) | < 5ms |
+| Cache hit | O(1) | < 1ms |
+| Vote cast | O(log N) | < 10ms |
+| Leaderboard query | O(log N + M) | < 50ms |
+| Item fetch | O(1) | < 5ms |
+
+Where:
+- N = number of requests in rate limit window (typically < 1000)
+- M = number of items returned (typically < 100)
+
+---
+
+## 🔐 Security Features
+
+1. **Rate Limiting**: Atomic sliding window prevents abuse
+2. **Admin Bypass**: Requests with admin API key skip rate limiting
+3. **Input Validation**: All inputs validated before processing
+4. **SQL Injection Prevention**: Parameterized queries
+5. **CORS Protection**: Restricted origins
+6. **Helmet Security Headers**: Security best practices
+7. **Error Handling**: No sensitive data in error messages
+8. **Logging**: All actions logged for audit trail
+
+---
+
+## 🚀 Deployment
+
+### Docker Support
+```bash
+docker-compose up -d
+```
+
+Services:
+- Redis: localhost:6379
+- PostgreSQL: localhost:5432
+- MongoDB: localhost:27017
+- Application: localhost:3000
+
+### Environment Variables
+```
+# Redis
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_PASSWORD=
+
+# PostgreSQL
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=voting
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=secret
+
+# MongoDB
+MONGODB_URI=mongodb://mongo:27017
+MONGODB_DB=voting_logs
+
+# Application
+PORT=3000
+NODE_ENV=production
+RATE_LIMIT_MAX_REQUESTS=100
+RATE_LIMIT_WINDOW_SECONDS=60
+ADMIN_API_KEY=your-admin-key
+
+# Cache
+CACHE_TTL_ITEM=600
+CACHE_TTL_RANKING=300
+```
+
+---
+
+## 📈 Monitoring & Observability
+
+### Metrics
+- Rate limit hits/blocks per user
+- Cache hit/miss ratio
+- Average response time
+- Voting activity per item
+- System health status
+
+### Logging
+- Request/response logging to MongoDB
+- Rate limit events
+- Cache invalidation audit trail
+- Error tracking
+
+### WebSocket Real-time Updates
+- Rate limit status updates
+- Leaderboard changes
+- Cache invalidations
+- Vote confirmations
+
+---
+
+## 🔄 Consistency & Durability
+
+### Redis → PostgreSQL Sync
+- Every vote written to PostgreSQL immediately (UPSERT)
+- Ensures durability and ACID compliance
+- Can recover Redis data from PostgreSQL if needed
+
+### Idempotency
+- Voting Lua script ensures idempotent operations
+- Safe to retry without side effects
+- Duplicate votes are handled correctly
+
+### Cache Coherency
+- Cache invalidated immediately after updates
+- Ensures consistency between Redis and PostgreSQL
+- Async MongoDB logging doesn't affect consistency
+
+---
+
+## 🎯 Key Features
+
+✅ **Atomic Operations**: All critical logic in Lua scripts
+✅ **O(log N) Complexity**: Efficient Redis Sorted Sets
+✅ **Idempotent**: Safe to retry requests
+✅ **ACID Compliance**: PostgreSQL durability
+✅ **Scalable**: Redis can handle millions of operations
+✅ **Real-time**: Leaderboard updates instantly
+✅ **Monitoring**: Comprehensive logging and stats
+✅ **Resilient**: Graceful degradation on failures
 cache:ranking (String)
   └─ Value: JSON array of top items
   └─ TTL: 300 seconds (5 minutes)

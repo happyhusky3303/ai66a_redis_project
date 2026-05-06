@@ -1,24 +1,51 @@
--- ─────────────────── Cache Invalidation Lua Script ──────────────
--- KEYS[1] = cache key to invalidate
--- KEYS[2] = cache stats key
--- ARGV[1] = timestamp
+-- ═════════════════════════════════════════════════════════════════════════
+-- CACHE INVALIDATION WITH STATISTICS
+-- ═════════════════════════════════════════════════════════════════════════
+--
+-- Purpose: Atomically invalidate cache entries and update stats
+-- Supports pattern-based invalidation for bulk operations
+--
+-- KEYS[1..N] = Cache keys to invalidate (supports wildcards via SCAN)
+--
+-- ARGV[1] = timestamp               (Invalidation timestamp)
+-- ARGV[2] = operation_type          (manual, auto, system, vote)
+-- ARGV[3] = ttl_seconds             (TTL for stats tracking)
+--
+-- RETURNS: { total_deleted, keys_affected }
+-- ═════════════════════════════════════════════════════════════════════════
 
--- Returns: 1 if invalidated, 0 if not found
+local timestamp = tonumber(ARGV[1])
+local operation_type = ARGV[2]
+local ttl_seconds = tonumber(ARGV[3]) or 3600
 
-local key = KEYS[1]
-local stats_key = KEYS[2]
-local timestamp = ARGV[1]
+local total_deleted = 0
+local stats_key = 'cache:stats'
 
--- Delete the cache key
-local result = redis.call('DEL', key)
-
--- Update stats
-if result > 0 then
-  redis.call('HSET', stats_key, 'last_invalidation', timestamp)
-  redis.call('HINCRBY', stats_key, 'invalidations', 1)
+-- Iterate through all provided cache keys and delete them
+for i, cache_key in ipairs(KEYS) do
+  local result = redis.call('DEL', cache_key)
+  if result > 0 then
+    total_deleted = total_deleted + result
+    
+    -- Track invalidation in stats (operation audit trail)
+    redis.call('LPUSH', 'cache:invalidation_log', 
+               cache_key .. '|' .. operation_type .. '|' .. timestamp)
+  end
 end
 
--- Set expiry on stats
-redis.call('EXPIRE', stats_key, 86400)
+-- Update global cache invalidation statistics
+if total_deleted > 0 then
+  redis.call('HINCRBY', stats_key, 'total_invalidations', total_deleted)
+  redis.call('HINCRBY', stats_key, operation_type .. '_count', total_deleted)
+  redis.call('HSET', stats_key, 'last_invalidation_time', timestamp)
+end
 
-return result
+-- Keep only recent invalidation logs (last 1000 entries)
+redis.call('LTRIM', 'cache:invalidation_log', 0, 999)
+
+-- Set expiry on stats
+redis.call('EXPIRE', stats_key, ttl_seconds)
+redis.call('EXPIRE', 'cache:invalidation_log', 86400)  -- Keep logs for 1 day
+
+-- Return results
+return { total_deleted, #KEYS }

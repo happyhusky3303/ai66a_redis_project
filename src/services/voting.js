@@ -1,84 +1,194 @@
+/**
+ * ═════════════════════════════════════════════════════════════════════════
+ * VOTING SERVICE
+ * ═════════════════════════════════════════════════════════════════════════
+ * 
+ * Core business logic for the voting system
+ * 
+ * Handles:
+ * - Vote casting with Redis atomicity
+ * - Real-time leaderboard updates
+ * - PostgreSQL durability sync
+ * - Cache invalidation
+ * 
+ * Architecture:
+ * 1. Redis (real-time processing via Lua scripts)
+ * 2. PostgreSQL (durability/ACID)
+ * 3. MongoDB (asynchronous logging)
+ * 4. Cache (invalidation on updates)
+ * ═════════════════════════════════════════════════════════════════════════
+ */
+
 const { query } = require('./postgres');
-const cacheLayer = require('./cache');
+const { cacheResponse, invalidateCacheKeys } = require('../middleware/cacheLayer');
 const redisScripts = require('../utils/redisScripts');
 const { getRedisClient } = require('./redis');
+const { logRequest } = require('./mongodb');
 const logger = require('../utils/logger');
 
 class VotingService {
   /**
-   * Cast a vote for an item
+   * STEP 1: RATE LIMITING (Handled by middleware)
+   * STEP 2: CACHE CHECK (Handled by middleware)
+   * STEP 3: VOTING LOGIC - Cast or update a vote
+   * 
+   * - Atomically execute via Lua script
+   * - Prevent duplicate votes
+   * - Update leaderboard in real-time
+   * - Sync to PostgreSQL
+   * - Invalidate caches
+   * - Log to MongoDB
    */
   async vote(userId, itemId, voteValue = 1) {
-    try {
-      // Update in Redis (real-time)
-      const voteResult = await redisScripts.vote(userId, itemId, voteValue);
+    const startTime = Date.now();
 
-      // Also update in PostgreSQL (transactional)
-      const pgResult = await query(
-        `INSERT INTO votes (user_id, item_id, vote_value) 
-         VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, item_id) 
-         DO UPDATE SET vote_value = EXCLUDED.vote_value, updated_at = CURRENT_TIMESTAMP
-         RETURNING id, vote_value`,
-        [userId, itemId, voteValue]
+    try {
+      // ─────────────── INPUT VALIDATION ───────────────
+      if (!userId || !itemId) {
+        const error = new Error('Missing required fields: userId, itemId');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      if (!Number.isInteger(voteValue) || Math.abs(voteValue) > 10) {
+        const error = new Error('Vote value must be integer between -10 and 10');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      // ─────────────── VERIFY ITEM EXISTS ───────────────
+      const itemCheck = await query(
+        'SELECT id FROM items WHERE id = $1',
+        [itemId]
       );
 
-      // Invalidate caches
-      await cacheLayer.invalidatePattern('cache:item:*');
-      await cacheLayer.invalidatePattern('cache:ranking:*');
+      if (itemCheck.rows.length === 0) {
+        const error = new Error(`Item not found: ${itemId}`);
+        error.statusCode = 404;
+        throw error;
+      }
 
-      logger.debug(`Vote cast by user ${userId} on item ${itemId}`);
+      // ─────────────── EXECUTE VOTING IN REDIS (ATOMIC) ───────────────
+      // Uses Lua script to ensure atomicity and prevent race conditions
+      const voteResult = await redisScripts.vote(userId, itemId, voteValue);
 
-      return {
-        voteId: pgResult.rows[0].id,
-        ...voteResult,
-        synced: true
+      logger.debug(`✓ Vote processed in Redis: ${userId} -> ${itemId} (score: ${voteResult.newScore})`);
+
+      // ─────────────── SYNC TO POSTGRESQL ───────────────
+      // Uses UPSERT to handle both new votes and updates
+      await this.syncVoteToPostgres(userId, itemId, voteValue);
+
+      // ─────────────── INVALIDATE CACHES ───────────────
+      // Remove cached rankings and item details
+      const keysToInvalidate = [
+        `cache:ranking:*`,
+        `cache:item:${itemId}`,
+        `cache:/api/ranking:*`
+      ];
+      
+      invalidateCacheKeys(keysToInvalidate).catch(err =>
+        logger.debug('Cache invalidation failed:', err.message)
+      );
+
+      // ─────────────── PREPARE RESPONSE ───────────────
+      const responseTime = Date.now() - startTime;
+
+      const response = {
+        success: true,
+        statusCode: 200,
+        vote: {
+          voteId: `${userId}:${itemId}`,
+          userId,
+          itemId,
+          voteValue,
+          timestamp: new Date().toISOString()
+        },
+        item: {
+          id: itemId,
+          score: voteResult.newScore,
+          rank: voteResult.rank
+        },
+        voting: {
+          isNew: voteResult.isNewVote === 1,
+          previousValue: voteResult.oldVoteValue || null,
+          change: voteResult.isNewVote === 1 ? voteValue : (voteValue - (voteResult.oldVoteValue || 0))
+        },
+        responseTime
       };
+
+      // ─────────────── ASYNC LOGGING TO MONGODB ───────────────
+      // Log vote action for analytics (non-blocking)
+      logRequest({
+        userId,
+        endpoint: '/api/vote',
+        method: 'POST',
+        status: 200,
+        statusCode: 200,
+        action: 'vote',
+        itemId,
+        voteValue,
+        responseTime,
+        newScore: voteResult.newScore,
+        rank: voteResult.rank
+      }).catch(err => logger.debug('Failed to log vote to MongoDB:', err.message));
+
+      return response;
+
     } catch (error) {
-      logger.error('Vote error:', error);
+      logger.error('Vote error:', {
+        message: error.message,
+        userId,
+        itemId,
+        statusCode: error.statusCode || 500
+      });
+
+      // Log error to MongoDB
+      logRequest({
+        userId,
+        endpoint: '/api/vote',
+        method: 'POST',
+        status: error.statusCode || 500,
+        statusCode: error.statusCode || 500,
+        action: 'vote',
+        itemId,
+        error: error.message,
+        responseTime: Date.now() - startTime
+      }).catch(err => logger.debug('Failed to log vote error:', err.message));
+
       throw error;
     }
   }
 
   /**
-   * Get item details with vote count
+   * Get item details with vote count and rank
+   * Uses Redis for real-time data + PostgreSQL for durability
    */
   async getItem(itemId) {
     try {
-      const cacheKey = `cache:item:${itemId}`;
-      const ttl = parseInt(process.env.CACHE_TTL_ITEM) || 600;
+      const client = getRedisClient();
 
-      return await cacheLayer.getOrSet(
-        cacheKey,
-        async () => {
-          const result = await query(
-            `SELECT id, title, description, score, created_at, updated_at 
-             FROM items WHERE id = $1`,
-            [itemId]
-          );
-
-          if (result.rows.length === 0) {
-            throw new Error('Item not found');
-          }
-
-          const item = result.rows[0];
-
-          // Get vote count from Redis
-          const client = getRedisClient();
-          const redisVotes = await client.hGet(`votes:${itemId}`, 'total');
-          item.score = parseInt(redisVotes, 10);
-          if (!Number.isFinite(item.score)) {
-            item.score = parseInt(item.score || result.rows[0].score, 10) || 0;
-          }
-
-          // Get rank from leaderboard
-          const rank = await client.zRevRank('leaderboard', itemId);
-          item.rank = rank !== null ? rank + 1 : null;
-
-          return item;
-        },
-        ttl
+      // ─────────────── VERIFY ITEM EXISTS ───────────────
+      const pgResult = await query(
+        `SELECT id, title, description, created_at, updated_at 
+         FROM items WHERE id = $1`,
+        [itemId]
       );
+
+      if (pgResult.rows.length === 0) {
+        throw new Error('Item not found');
+      }
+
+      const item = pgResult.rows[0];
+
+      // ─────────────── GET SCORE FROM REDIS ───────────────
+      const scoreStr = await client.hGet(`votes:${itemId}`, 'total');
+      item.score = scoreStr ? parseInt(scoreStr, 10) : 0;
+
+      // ─────────────── GET RANK FROM LEADERBOARD ───────────────
+      const rank = await client.zRevRank('leaderboard', itemId);
+      item.rank = rank !== null ? rank + 1 : null;
+
+      return item;
     } catch (error) {
       logger.error('GetItem error:', error);
       throw error;
@@ -87,78 +197,54 @@ class VotingService {
 
   /**
    * Get top N items (leaderboard)
+   * Uses Redis Sorted Set for O(log N) performance
    */
   async getTopItems(limit = 10, offset = 0) {
     try {
-      const cacheKey = `cache:ranking:${limit}:${offset}`;
-      const ttl = parseInt(process.env.CACHE_TTL_RANKING) || 300;
+      const client = getRedisClient();
+      limit = Math.min(parseInt(limit) || 10, 100);
+      offset = Math.max(parseInt(offset) || 0, 0);
 
-      return await cacheLayer.getOrSet(
-        cacheKey,
-        async () => {
-          const client = getRedisClient();
-
-          // Get top items from leaderboard
-          const topItems = await client.zRangeWithScores(
-            'leaderboard',
-            offset,
-            offset + limit - 1,
-            { REV: true }
-          );
-
-          if (topItems.length === 0) {
-            const fallbackResult = await query(
-              `SELECT id, title, description, score, created_at, updated_at
-               FROM items
-               ORDER BY score DESC, created_at ASC
-               LIMIT $1 OFFSET $2`,
-              [limit, offset]
-            );
-
-            return fallbackResult.rows.map((item, index) => ({
-              ...item,
-              score: parseInt(item.score, 10) || 0,
-              rank: offset + index + 1
-            }));
-          }
-
-          // Get item details from PostgreSQL
-          const itemIds = topItems.map((entry) => entry.value);
-
-          if (itemIds.length === 0) {
-            return [];
-          }
-
-          const placeholders = itemIds.map((_, i) => `$${i + 1}`).join(',');
-          const result = await query(
-            `SELECT id, title, description, created_at, updated_at 
-             FROM items WHERE id IN (${placeholders})`,
-            itemIds
-          );
-
-          // Map scores back
-          const scoreMap = {};
-          for (const entry of topItems) {
-            scoreMap[entry.value] = parseInt(entry.score, 10);
-          }
-
-          const itemMap = new Map(result.rows.map(item => [item.id, item]));
-
-          return topItems
-            .map((entry, index) => {
-              const item = itemMap.get(entry.value);
-              if (!item) return null;
-
-              return {
-                ...item,
-                score: scoreMap[item.id] || 0,
-                rank: offset + index + 1
-              };
-            })
-            .filter(Boolean);
-        },
-        ttl
+      // ─────────────── GET FROM REDIS LEADERBOARD ───────────────
+      // O(log N + M) where M is the number of returned items
+      const topItems = await client.zRangeWithScores(
+        'leaderboard',
+        offset,
+        offset + limit - 1,
+        { REV: true }  // Reverse order (highest first)
       );
+
+      if (topItems.length === 0) {
+        return [];
+      }
+
+      // ─────────────── FETCH ITEM DETAILS FROM POSTGRESQL ───────────────
+      const itemIds = topItems.map(entry => entry.value);
+      const placeholders = itemIds.map((_, i) => `$${i + 1}`).join(',');
+      
+      const pgResult = await query(
+        `SELECT id, title, description, created_at, updated_at 
+         FROM items WHERE id IN (${placeholders})`,
+        itemIds
+      );
+
+      // ─────────────── MERGE RESULTS ───────────────
+      const itemMap = new Map(pgResult.rows.map(item => [item.id, item]));
+
+      const results = topItems
+        .map((entry, index) => {
+          const item = itemMap.get(entry.value);
+          if (!item) return null;
+
+          return {
+            ...item,
+            score: parseInt(entry.score, 10),
+            rank: offset + index + 1
+          };
+        })
+        .filter(Boolean);
+
+      return results;
     } catch (error) {
       logger.error('GetTopItems error:', error);
       throw error;
@@ -167,13 +253,16 @@ class VotingService {
 
   /**
    * Get user votes
+   * Retrieve all votes cast by a specific user
    */
   async getUserVotes(userId) {
     try {
       const result = await query(
-        `SELECT item_id, vote_value, created_at 
-         FROM votes WHERE user_id = $1
-         ORDER BY created_at DESC`,
+        `SELECT id, item_id, vote_value, created_at, updated_at
+         FROM votes 
+         WHERE user_id = $1
+         ORDER BY created_at DESC
+         LIMIT 100`,
         [userId]
       );
 
@@ -185,37 +274,101 @@ class VotingService {
   }
 
   /**
-   * Sync Redis voting data to PostgreSQL
-   * (Run periodically to ensure consistency)
+   * INTERNAL: Sync vote to PostgreSQL for durability
+   * Uses UPSERT (INSERT ON CONFLICT) for idempotency
    */
-  async syncVotesToPostgres() {
+  async syncVoteToPostgres(userId, itemId, voteValue) {
+    try {
+      const result = await query(
+        `INSERT INTO votes (user_id, item_id, vote_value) 
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, item_id) 
+         DO UPDATE SET 
+           vote_value = EXCLUDED.vote_value, 
+           updated_at = CURRENT_TIMESTAMP
+         RETURNING id, vote_value`,
+        [userId, itemId, voteValue]
+      );
+
+      logger.debug(`✓ Vote synced to PostgreSQL: ${result.rows[0].id}`);
+      return result.rows[0];
+    } catch (error) {
+      logger.error('PostgreSQL sync error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Batch sync: Periodically sync all Redis votes to PostgreSQL
+   * Run this as a scheduled background job to ensure consistency
+   * Should run every 5-10 minutes
+   */
+  async syncAllVotesToPostgres() {
     try {
       const client = getRedisClient();
-      const itemIds = await client.keys('votes:*');
+      const itemKeys = await client.keys('votes:*');
 
       let syncedCount = 0;
 
-      for (const voteKey of itemIds) {
+      for (const voteKey of itemKeys) {
         const itemId = voteKey.replace('votes:', '');
         const voteData = await client.hGetAll(voteKey);
 
         if (voteData.total) {
+          const score = parseInt(voteData.total, 10);
+          
           // Update item score in PostgreSQL
           await query(
             `UPDATE items SET score = $1, updated_at = CURRENT_TIMESTAMP 
              WHERE id = $2`,
-            [parseInt(voteData.total), itemId]
+            [score, itemId]
           );
 
           syncedCount++;
         }
       }
 
-      logger.info(`Synced ${syncedCount} items to PostgreSQL`);
+      logger.info(`✓ Synced ${syncedCount} items to PostgreSQL`);
       return syncedCount;
     } catch (error) {
-      logger.error('Sync error:', error);
+      logger.error('Batch sync error:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Get voting statistics
+   * Returns summary of voting activity
+   */
+  async getVotingStats() {
+    try {
+      const client = getRedisClient();
+
+      const leaderboardSize = await client.zCard('leaderboard');
+      const totalScore = await client.eval(
+        `
+        local sum = 0
+        local items = redis.call('ZRANGE', KEYS[1], 0, -1, 'WITHSCORES')
+        for i = 2, #items, 2 do
+          sum = sum + tonumber(items[i])
+        end
+        return sum
+        `,
+        { keys: ['leaderboard'] }
+      );
+
+      return {
+        totalItems: leaderboardSize,
+        totalScore: parseInt(totalScore || 0, 10),
+        averageScore: leaderboardSize > 0 ? Math.round((totalScore || 0) / leaderboardSize) : 0
+      };
+    } catch (error) {
+      logger.error('GetVotingStats error:', error);
+      return {
+        totalItems: 0,
+        totalScore: 0,
+        averageScore: 0
+      };
     }
   }
 }

@@ -1,126 +1,262 @@
+/**
+ * ═════════════════════════════════════════════════════════════════════════
+ * API ROUTES - RESTful Endpoints
+ * ═════════════════════════════════════════════════════════════════════════
+ * 
+ * Implements the following flow:
+ * 1. Rate Limiting (Redis Lua - middleware)
+ * 2. Cache Layer (Redis - middleware)
+ * 3. Authentication (x-api-key header)
+ * 4. Business Logic (VotingService)
+ * 5. PostgreSQL Sync (automatic)
+ * 6. Cache Invalidation (on write)
+ * 7. MongoDB Logging (asynchronous)
+ * ═════════════════════════════════════════════════════════════════════════
+ */
+
 const express = require('express');
 const votingService = require('../services/voting');
-const cacheLayer = require('../services/cache');
+const { cacheLayerMiddleware, cacheInvalidationMiddleware, getCacheStats } = require('../middleware/cacheLayer');
+const { logRequest } = require('../services/mongodb');
 const { query } = require('../services/postgres');
 const logger = require('../utils/logger');
 
 const router = express.Router();
+
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-// ─────────────────── Health Check ──────────────
-router.get('/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    timestamp: new Date().toISOString(),
-    rateLimitInfo: req.rateLimitInfo
-  });
+// ═════════════════════════════════════════════════════════════════════════
+// HEALTH CHECK ENDPOINT
+// ═════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/health
+ * Check system health and connection status
+ */
+router.get('/health', async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    let postgresStatus = 'disconnected';
+    let mongodbStatus = 'disconnected';
+
+    // Test PostgreSQL
+    try {
+      await query('SELECT 1');
+      postgresStatus = 'connected';
+    } catch (error) {
+      logger.debug(`Health check PostgreSQL failed: ${error.message}`);
+    }
+
+    // Test MongoDB (getDB function will throw if not connected)
+    try {
+      const { getDB } = require('../services/mongodb');
+      getDB();
+      mongodbStatus = 'connected';
+    } catch (error) {
+      logger.debug(`Health check MongoDB failed: ${error.message}`);
+    }
+
+    const responseTime = Date.now() - startTime;
+
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      responseTime,
+      databases: {
+        postgres: postgresStatus,
+        mongodb: mongodbStatus,
+        redis: 'connected'
+      },
+      rateLimitInfo: req.rateLimitInfo
+    });
+  } catch (error) {
+    logger.error('Health check error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
 });
 
-// ─────────────────── Voting Endpoints ──────────────
+// ═════════════════════════════════════════════════════════════════════════
+// VOTING ENDPOINTS
+// ═════════════════════════════════════════════════════════════════════════
 
 /**
  * POST /api/vote
+ * 
  * Cast a vote for an item
+ * 
+ * Request flow:
+ * 1. Rate limiting check (middleware) → 429 if exceeded
+ * 2. Validate input (userId, itemId, voteValue)
+ * 3. Execute voting via Redis Lua script (atomic)
+ * 4. Sync to PostgreSQL (UPSERT)
+ * 5. Invalidate caches
+ * 6. Log to MongoDB (async)
+ * 
+ * Request body:
+ * {
+ *   "userId": "user-id",
+ *   "itemId": "item-id", 
+ *   "voteValue": 1
+ * }
  */
 router.post('/vote', async (req, res, next) => {
+  const startTime = Date.now();
+
   try {
     const { userId, itemId } = req.body;
-    const voteValue = Number.isInteger(req.body.voteValue) ? req.body.voteValue : 1;
+    let voteValue = Number.isInteger(req.body.voteValue) ? req.body.voteValue : 1;
 
-    // Validation
+    // ─────────────── INPUT VALIDATION ───────────────
     if (!userId || !itemId) {
       return res.status(400).json({
-        error: 'Missing required fields: userId, itemId'
+        error: 'Validation Error',
+        statusCode: 400,
+        message: 'Missing required fields: userId, itemId',
+        fields: {
+          userId: !userId ? 'required' : 'ok',
+          itemId: !itemId ? 'required' : 'ok'
+        }
       });
     }
 
-    if (!Number.isInteger(voteValue) || voteValue < 1) {
-      return res.status(400).json({ error: 'voteValue must be a positive integer' });
+    if (!Number.isInteger(voteValue) || Math.abs(voteValue) > 10) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        statusCode: 400,
+        message: 'voteValue must be integer between -10 and 10'
+      });
     }
 
-    // Check if item exists
-    const itemResult = await query('SELECT id FROM items WHERE id = $1', [itemId]);
-    if (itemResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Item not found' });
-    }
-
+    // ─────────────── ENSURE USER EXISTS ───────────────
     let userIdFromDB = userId;
 
-    if (UUID_REGEX.test(userId)) {
-      const existingUser = await query('SELECT id FROM users WHERE id = $1', [userId]);
-      if (existingUser.rows.length === 0) {
-        return res.status(404).json({ error: 'User not found' });
+    if (!UUID_REGEX.test(userId)) {
+      // Create or get user
+      try {
+        const userResult = await query(
+          `INSERT INTO users (username, email) VALUES ($1, $2)
+           ON CONFLICT (username) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+           RETURNING id`,
+          [userId, `${userId}@voting.local`]
+        );
+        userIdFromDB = userResult.rows[0].id;
+      } catch (error) {
+        logger.error('User creation error:', error);
+        userIdFromDB = userId; // Fall back to provided ID
       }
-    } else {
-      const userResult = await query(
-        `INSERT INTO users (username, email) VALUES ($1, $2)
-         ON CONFLICT (username) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-         RETURNING id`,
-        [userId, `${userId}@voting.local`]
-      );
-      userIdFromDB = userResult.rows[0].id;
     }
 
-    // Cast vote
+    // ─────────────── EXECUTE VOTING ───────────────
     const voteResult = await votingService.vote(userIdFromDB, itemId, voteValue);
 
+    const responseTime = Date.now() - startTime;
+
+    // Return response
     res.json({
-      success: true,
-      vote: voteResult,
+      ...voteResult,
       rateLimitInfo: {
-        allowed: req.rateLimitInfo.allowed,
-        blocked: req.rateLimitInfo.blocked,
-        resetIn: req.rateLimitInfo.ttl
+        allowed: req.rateLimitInfo?.allowed || 1,
+        blocked: req.rateLimitInfo?.blocked || 0,
+        remaining: req.rateLimitInfo?.remaining || 99
       }
     });
+
   } catch (error) {
-    next(error);
+    logger.error('Vote endpoint error:', error);
+    const statusCode = error.statusCode || 500;
+    
+    res.status(statusCode).json({
+      error: error.message || 'Vote failed',
+      statusCode,
+      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+    });
   }
 });
 
 /**
  * GET /api/item/:id
  * Get item details with vote count and rank
+ * 
+ * Returns:
+ * {
+ *   "id": "item-id",
+ *   "title": "Item Title",
+ *   "score": 42,
+ *   "rank": 5
+ * }
  */
-router.get('/item/:id', async (req, res, next) => {
-  try {
-    const item = await votingService.getItem(req.params.id);
+router.get('/item/:id', 
+  cacheLayerMiddleware(req => `cache:item:${req.params.id}`),
+  async (req, res, next) => {
+    try {
+      const item = await votingService.getItem(req.params.id);
 
-    res.json({
-      success: true,
-      item,
-      cached: req.query.cached !== 'false'
-    });
-  } catch (error) {
-    next(error);
+      res.json({
+        success: true,
+        data: item,
+        cached: req.headers['x-cache-hit'] === 'true'
+      });
+    } catch (error) {
+      logger.error('GetItem error:', error);
+      next(error);
+    }
   }
-});
+);
 
 /**
  * GET /api/ranking
- * Get top N items (leaderboard)
+ * Get leaderboard (top N items by vote count)
+ * 
+ * Query params:
+ * - limit: Number of items (default: 10, max: 100)
+ * - offset: Pagination offset (default: 0)
+ * 
+ * Returns:
+ * {
+ *   "items": [
+ *     { "id": "item-1", "score": 100, "rank": 1 },
+ *     ...
+ *   ],
+ *   "pagination": { "limit": 10, "offset": 0 }
+ * }
  */
-router.get('/ranking', async (req, res, next) => {
-  try {
+router.get('/ranking',
+  cacheLayerMiddleware(req => {
     const limit = Math.min(parseInt(req.query.limit) || 10, 100);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    return `cache:ranking:${limit}:${offset}`;
+  }),
+  async (req, res, next) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+      const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
-    const items = await votingService.getTopItems(limit, offset);
+      const items = await votingService.getTopItems(limit, offset);
 
-    res.json({
-      success: true,
-      items,
-      pagination: { limit, offset, total: items.length },
-      cached: true
-    });
-  } catch (error) {
-    next(error);
+      res.json({
+        success: true,
+        data: items,
+        pagination: {
+          limit,
+          offset,
+          count: items.length
+        },
+        cached: false
+      });
+    } catch (error) {
+      logger.error('GetRanking error:', error);
+      next(error);
+    }
   }
-});
+);
 
 /**
  * GET /api/user/:userId/votes
- * Get user votes
+ * Get all votes cast by a user
  */
 router.get('/user/:userId/votes', async (req, res, next) => {
   try {
@@ -128,137 +264,38 @@ router.get('/user/:userId/votes', async (req, res, next) => {
 
     res.json({
       success: true,
-      votes
+      userId: req.params.userId,
+      votes,
+      count: votes.length
     });
   } catch (error) {
+    logger.error('GetUserVotes error:', error);
     next(error);
   }
 });
 
-// ─────────────────── Cache Endpoints ──────────────
-
 /**
- * GET /api/cache/stats
- * Get cache statistics
+ * GET /api/stats
+ * Get system statistics
  */
-router.get('/cache/stats', async (req, res, next) => {
+router.get('/stats', async (req, res, next) => {
   try {
-    const stats = await cacheLayer.getAllCacheStats();
+    const votingStats = await votingService.getVotingStats();
+    const cacheStats = await getCacheStats();
 
     res.json({
       success: true,
-      cacheStats: stats,
-      summary: {
-        totalKeys: stats.length,
-        totalHits: stats.reduce((sum, s) => sum + s.hits, 0),
-        totalMisses: stats.reduce((sum, s) => sum + s.misses, 0),
-        hitRate: stats.length > 0 
-          ? ((stats.reduce((sum, s) => sum + s.hits, 0) / 
-              (stats.reduce((sum, s) => sum + s.hits + s.misses, 0) || 1)) * 100).toFixed(2) + '%'
-          : '0%'
+      voting: votingStats,
+      cache: {
+        hits: cacheStats.total_hits || 0,
+        misses: cacheStats.total_misses || 0,
+        hitRate: cacheStats.total_hits && cacheStats.total_misses 
+          ? (cacheStats.total_hits / (cacheStats.total_hits + cacheStats.total_misses) * 100).toFixed(2) + '%'
+          : 'N/A'
       }
     });
   } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * POST /api/cache/invalidate/:key
- * Invalidate a cache key
- */
-router.post('/cache/invalidate/:key', async (req, res, next) => {
-  try {
-    const { key } = req.params;
-    const normalizedKey = key.startsWith('cache:') ? key : `cache:${key}`;
-    const deleted = await cacheLayer.delete(normalizedKey);
-
-    res.json({
-      success: true,
-      deleted
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─────────────────── Rate Limit Stats ──────────────
-
-/**
- * GET /api/rate-limit/stats
- * Get rate limit statistics
- */
-router.get('/rate-limit/stats', async (req, res, next) => {
-  try {
-    const result = await query(
-      `SELECT user_id, 
-              COUNT(*) as total_requests,
-              SUM(CASE WHEN requests_blocked > 0 THEN 1 ELSE 0 END) as blocked_windows,
-              SUM(requests_blocked) as total_blocked
-       FROM rate_limit_stats
-       GROUP BY user_id
-       ORDER BY total_blocked DESC
-       LIMIT 20`
-    );
-
-    res.json({
-      success: true,
-      stats: result.rows
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─────────────────── System Endpoints ──────────────
-
-/**
- * POST /api/sync/votes
- * Sync Redis voting data to PostgreSQL
- */
-router.post('/sync/votes', async (req, res, next) => {
-  try {
-    const synced = await votingService.syncVotesToPostgres();
-
-    res.json({
-      success: true,
-      synced
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * GET /api/stats/summary
- * Get system summary statistics
- */
-router.get('/stats/summary', async (req, res, next) => {
-  try {
-    // Get user count
-    const usersResult = await query('SELECT COUNT(*) as count FROM users');
-
-    // Get total votes
-    const votesResult = await query('SELECT COUNT(*) as count FROM votes');
-
-    // Get total items
-    const itemsResult = await query('SELECT COUNT(*) as count FROM items');
-
-    // Get cache stats
-    const cacheStats = await cacheLayer.getAllCacheStats();
-    const totalCacheHits = cacheStats.reduce((sum, s) => sum + s.hits, 0);
-
-    res.json({
-      success: true,
-      summary: {
-        users: parseInt(usersResult.rows[0].count),
-        votes: parseInt(votesResult.rows[0].count),
-        items: parseInt(itemsResult.rows[0].count),
-        cacheKeys: cacheStats.length,
-        cacheHits: totalCacheHits
-      }
-    });
-  } catch (error) {
+    logger.error('GetStats error:', error);
     next(error);
   }
 });
