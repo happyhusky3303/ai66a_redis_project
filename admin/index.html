@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Panel - Rate Limiting & API Gateway</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f5f5f5;
+      color: #333;
+    }
+
+    .admin-container {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      width: 250px;
+      background: #2c3e50;
+      color: white;
+      padding: 20px;
+      overflow-y: auto;
+      position: fixed;
+      height: 100vh;
+      left: 0;
+      top: 0;
+    }
+
+    .sidebar h1 {
+      font-size: 18px;
+      margin-bottom: 20px;
+      color: #3498db;
+    }
+
+    .sidebar-menu {
+      list-style: none;
+    }
+
+    .sidebar-menu li {
+      margin-bottom: 10px;
+    }
+
+    .sidebar-menu a {
+      color: #ecf0f1;
+      text-decoration: none;
+      display: block;
+      padding: 10px;
+      border-radius: 4px;
+      transition: background 0.3s;
+    }
+
+    .sidebar-menu a:hover,
+    .sidebar-menu a.active {
+      background: #3498db;
+      color: white;
+    }
+
+    .main-content {
+      flex: 1;
+      margin-left: 250px;
+      padding: 20px;
+    }
+
+    header {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    header h1 {
+      color: #2c3e50;
+      font-size: 24px;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .button {
+      background: #3498db;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.3s;
+    }
+
+    .button:hover {
+      background: #2980b9;
+    }
+
+    .button.danger {
+      background: #e74c3c;
+    }
+
+    .button.danger:hover {
+      background: #c0392b;
+    }
+
+    .button.success {
+      background: #27ae60;
+    }
+
+    .button.success:hover {
+      background: #229954;
+    }
+
+    .section {
+      display: none;
+    }
+
+    .section.active {
+      display: block;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .card h2 {
+      color: #2c3e50;
+      font-size: 18px;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #3498db;
+    }
+
+    .metric {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #eee;
+    }
+
+    .metric:last-child {
+      border-bottom: none;
+    }
+
+    .metric-value {
+      color: #3498db;
+      font-weight: bold;
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+    }
+
+    .table th {
+      background: #34495e;
+      color: white;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+    }
+
+    .table td {
+      padding: 12px;
+      border-bottom: 1px solid #ddd;
+    }
+
+    .table tbody tr:hover {
+      background: #f9f9f9;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .status-ok { background: #27ae60; color: white; }
+    .status-warning { background: #f39c12; color: white; }
+    .status-error { background: #e74c3c; color: white; }
+
+    .search-box {
+      margin-bottom: 20px;
+    }
+
+    .search-box input {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .pagination {
+      display: flex;
+      gap: 5px;
+      margin-top: 15px;
+      justify-content: center;
+    }
+
+    .pagination button {
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      background: white;
+      color: #2c3e50;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.3s;
+    }
+
+    .pagination button:hover,
+    .pagination button.active {
+      background: #3498db;
+      color: white;
+    }
+
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal.show {
+      display: flex;
+    }
+
+    .modal-content {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      max-width: 500px;
+      width: 90%;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    .modal-content h2 {
+      color: #2c3e50;
+      margin-bottom: 20px;
+    }
+
+    .form-group {
+      margin-bottom: 15px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+
+    .form-group input,
+    .form-group textarea {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+
+    .form-group textarea {
+      resize: vertical;
+      min-height: 100px;
+    }
+
+    .form-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #f3f3f3;
+      border-top: 2px solid #3498db;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .chart-container {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    .stats-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+
+    .stat-card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      border-left: 4px solid #3498db;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .stat-card.danger {
+      border-left-color: #e74c3c;
+    }
+
+    .stat-card.success {
+      border-left-color: #27ae60;
+    }
+
+    .stat-card-value {
+      font-size: 28px;
+      font-weight: bold;
+      color: #2c3e50;
+      margin-bottom: 5px;
+    }
+
+    .stat-card-label {
+      font-size: 12px;
+      color: #7f8c8d;
+      text-transform: uppercase;
+    }
+
+    @media (max-width: 768px) {
+      .sidebar {
+        width: 100%;
+        height: auto;
+        position: relative;
+        display: none;
+      }
+
+      .main-content {
+        margin-left: 0;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      header {
+        flex-direction: column;
+        gap: 15px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="admin-container">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <h1>🔐 Admin Panel</h1>
+      <ul class="sidebar-menu">
+        <li><a href="javascript:void(0)" onclick="showSection('dashboard'); return false;" class="menu-link active">📊 Dashboard</a></li>
+        <li><a href="javascript:void(0)" onclick="showSection('ratelimits'); return false;" class="menu-link">⚡ Rate Limits</a></li>
+        <li><a href="javascript:void(0)" onclick="showSection('cache'); return false;" class="menu-link">💾 Cache</a></li>
+        <li><a href="javascript:void(0)" onclick="showSection('users'); return false;" class="menu-link">👥 Users</a></li>
+        <li><a href="javascript:void(0)" onclick="showSection('items'); return false;" class="menu-link">📦 Items</a></li>
+        <li><a href="javascript:void(0)" onclick="showSection('logs'); return false;" class="menu-link">📝 Logs</a></li>
+        <li><a href="javascript:void(0)" onclick="showSection('system'); return false;" class="menu-link">🖥️ System</a></li>
+      </ul>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+      <header>
+        <h1 id="sectionTitle">Dashboard</h1>
+        <div class="header-actions">
+          <button class="button" onclick="refreshCurrentSection(); return false;">🔄 Refresh</button>
+        </div>
+      </header>
+
+      <!-- Dashboard Section -->
+      <section id="dashboard" class="section active">
+        <div class="stats-summary" id="dashboardStats"></div>
+        <div class="grid">
+          <div class="card">
+            <h2>Database Statistics</h2>
+            <div id="dbStats"></div>
+          </div>
+          <div class="card">
+            <h2>Redis Statistics</h2>
+            <div id="redisStats"></div>
+          </div>
+          <div class="card">
+            <h2>Recent Activity</h2>
+            <table class="table" id="recentActivity">
+              <thead>
+                <tr>
+                  <th>Endpoint</th>
+                  <th>Method</th>
+                  <th>Status</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Rate Limits Section -->
+      <section id="ratelimits" class="section">
+        <div class="card">
+          <h2>Active Rate Limits</h2>
+          <div class="search-box">
+            <input type="text" placeholder="Search by User ID..." id="rateLimitSearch" onkeyup="filterRateLimits()">
+          </div>
+          <table class="table" id="rateLimitsTable">
+            <thead>
+              <tr>
+                <th>User ID</th>
+                <th>Active Requests</th>
+                <th>Allowed</th>
+                <th>Blocked</th>
+                <th>TTL</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Cache Section -->
+      <section id="cache" class="section">
+        <div class="grid">
+          <div class="card">
+            <h2>Cache Summary</h2>
+            <div id="cacheSummary"></div>
+            <button class="button danger" onclick="clearAllCache(); return false;" style="width: 100%; margin-top: 15px;">🗑️ Clear All Cache</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Cache Keys</h2>
+          <table class="table" id="cacheKeysTable">
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Hits</th>
+                <th>Misses</th>
+                <th>TTL (s)</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Users Section -->
+      <section id="users" class="section">
+        <div class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2 style="margin: 0;">Users Management</h2>
+            <button class="button success" onclick="openUserModal(); return false;">➕ Add User</button>
+          </div>
+          <div class="search-box">
+            <input type="text" placeholder="Search users..." id="usersSearch" onkeyup="filterUsers()">
+          </div>
+          <table class="table" id="usersTable">
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Votes</th>
+                <th>Joined</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="pagination" id="usersPagination"></div>
+        </div>
+      </section>
+
+      <!-- Items Section -->
+      <section id="items" class="section">
+        <div class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2 style="margin: 0;">Items Management</h2>
+            <button class="button success" onclick="openItemModal(); return false;">➕ Add Item</button>
+          </div>
+          <table class="table" id="itemsTable">
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Description</th>
+                <th>Score</th>
+                <th>Rank</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Logs Section -->
+      <section id="logs" class="section">
+        <div class="card">
+          <h2>API Logs</h2>
+          <table class="table" id="logsTable">
+            <thead>
+              <tr>
+                <th>Endpoint</th>
+                <th>Method</th>
+                <th>Status</th>
+                <th>Response Time</th>
+                <th>Rate Limited</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- System Section -->
+      <section id="system" class="section">
+        <div class="grid">
+          <div class="card">
+            <h2>System Health</h2>
+            <div id="systemHealth"></div>
+          </div>
+          <div class="card">
+            <h2>Server Information</h2>
+            <div id="serverInfo"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- User Modal -->
+  <div class="modal" id="userModal">
+    <div class="modal-content">
+      <h2>Add New User</h2>
+      <form onsubmit="saveUser(event)">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="userUsername" required>
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="userEmail" required>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="button success">Save</button>
+          <button type="button" class="button" onclick="closeModal('userModal')">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Item Modal -->
+  <div class="modal" id="itemModal">
+    <div class="modal-content">
+      <h2>Add New Item</h2>
+      <form onsubmit="saveItem(event)">
+        <div class="form-group">
+          <label>Title</label>
+          <input type="text" id="itemTitle" required>
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="itemDescription"></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="button success">Save</button>
+          <button type="button" class="button" onclick="closeModal('itemModal')">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // Global state
+    // =========================================================================
+    const ADMIN_API_KEY = localStorage.getItem('adminApiKey') || 
+                          prompt('Enter Admin API Key:', 'your_secret_admin_key_here') || 
+                          'your_secret_admin_key_here';
+    localStorage.setItem('adminApiKey', ADMIN_API_KEY);
+    
+    let currentSection = 'dashboard';
+
+    // Helper: Make admin API call
+    async function adminFetch(endpoint, options = {}) {
+      const response = await fetch(`/admin/api${endpoint}`, {
+        ...options,
+        headers: {
+          'x-admin-api-key': ADMIN_API_KEY,
+          'content-type': 'application/json',
+          ...options.headers
+        }
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || `API error: ${response.status}`);
+      }
+
+      return response.json();
+    }
+
+    // =========================================================================
+    // Navigation & Section Management
+    // =========================================================================
+    function showSection(sectionId) {
+      // Hide all sections
+      document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+      document.querySelectorAll('.menu-link').forEach(l => l.classList.remove('active'));
+
+      // Show selected section
+      document.getElementById(sectionId).classList.add('active');
+
+      // Highlight menu link
+      const menuLink = Array.from(document.querySelectorAll('.menu-link')).find(
+        l => l.getAttribute('onclick').includes(sectionId)
+      );
+      if (menuLink) menuLink.classList.add('active');
+
+      currentSection = sectionId;
+
+      // Update title
+      const titles = {
+        'dashboard': '📊 Dashboard',
+        'ratelimits': '⚡ Rate Limits',
+        'cache': '💾 Cache',
+        'users': '👥 Users',
+        'items': '📦 Items',
+        'logs': '📝 Logs',
+        'system': '🖥️ System'
+      };
+      document.getElementById('sectionTitle').textContent = titles[sectionId] || sectionId;
+
+      // Load data
+      loadSectionData(sectionId);
+    }
+
+    // Load section data
+    async function loadSectionData(sectionId) {
+      try {
+        switch (sectionId) {
+          case 'dashboard':
+            await loadDashboard();
+            break;
+          case 'ratelimits':
+            await loadRateLimits();
+            break;
+          case 'cache':
+            await loadCacheData();
+            break;
+          case 'users':
+            await loadUsers();
+            break;
+          case 'items':
+            await loadItems();
+            break;
+          case 'logs':
+            await loadLogs();
+            break;
+          case 'system':
+            await loadSystemInfo();
+            break;
+        }
+      } catch (error) {
+        console.error(`Error loading ${sectionId}:`, error);
+        alert(`Failed to load ${sectionId}: ${error.message}`);
+      }
+    }
+
+    // =========================================================================
+    // Dashboard
+    // =========================================================================
+    async function loadDashboard() {
+      try {
+        const [stats, cacheStats, logs] = await Promise.all([
+          adminFetch('/system/stats'),
+          adminFetch('/cache/stats'),
+          adminFetch('/logs?limit=5')
+        ]);
+
+        // Display summary cards
+        const summary = `
+          <div class="stat-card">
+            <div class="stat-card-value">${stats.system.database.users}</div>
+            <div class="stat-card-label">Total Users</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-value">${stats.system.database.votes}</div>
+            <div class="stat-card-label">Total Votes</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-value">${stats.system.database.items}</div>
+            <div class="stat-card-label">Total Items</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-value">${cacheStats.summary.hitRate}</div>
+            <div class="stat-card-label">Cache Hit Rate</div>
+          </div>
+        `;
+        document.getElementById('dashboardStats').innerHTML = summary;
+
+        // Database stats
+        document.getElementById('dbStats').innerHTML = `
+          <div class="metric">
+            <span>Users</span>
+            <span class="metric-value">${stats.system.database.users}</span>
+          </div>
+          <div class="metric">
+            <span>Votes</span>
+            <span class="metric-value">${stats.system.database.votes}</span>
+          </div>
+          <div class="metric">
+            <span>Items</span>
+            <span class="metric-value">${stats.system.database.items}</span>
+          </div>
+        `;
+
+        // Redis stats
+        document.getElementById('redisStats').innerHTML = `
+          <div class="metric">
+            <span>Version</span>
+            <span class="metric-value">${stats.system.redis.version}</span>
+          </div>
+          <div class="metric">
+            <span>Memory</span>
+            <span class="metric-value">${stats.system.redis.usedMemory}</span>
+          </div>
+          <div class="metric">
+            <span>Cache Keys</span>
+            <span class="metric-value">${cacheStats.summary.totalKeys}</span>
+          </div>
+        `;
+
+        // Recent activity
+        const logsHtml = (logs.logs || []).map(log => `
+          <tr>
+            <td>${log.endpoint}</td>
+            <td><span class="status-badge">${log.method}</span></td>
+            <td><span class="status-badge ${log.status_code < 400 ? 'status-ok' : 'status-error'}">${log.status_code}</span></td>
+            <td>${log.response_time_ms || '--'}ms</td>
+          </tr>
+        `).join('');
+        document.querySelector('#recentActivity tbody').innerHTML = logsHtml || 
+          '<tr><td colspan="4" style="text-align: center; color: #999;">No activity</td></tr>';
+      } catch (error) {
+        console.error('Dashboard error:', error);
+      }
+    }
+
+    // =========================================================================
+    // Rate Limits
+    // =========================================================================
+    async function loadRateLimits() {
+      try {
+        const data = await adminFetch('/rate-limits');
+        const html = (data.rateLimits || []).map(rl => `
+          <tr>
+            <td>${rl.userId}</td>
+            <td>${rl.activeRequests}</td>
+            <td>${rl.allowed}</td>
+            <td><span class="status-badge status-warning">${rl.blocked}</span></td>
+            <td>${rl.ttl}</td>
+            <td>
+              <button class="button danger" onclick="resetRateLimit('${rl.userId}');" 
+                style="padding: 5px 10px; font-size: 12px;">Reset</button>
+            </td>
+          </tr>
+        `).join('');
+        document.querySelector('#rateLimitsTable tbody').innerHTML = html ||
+          '<tr><td colspan="6" style="text-align: center; color: #999;">No active rate limits</td></tr>';
+      } catch (error) {
+        console.error('Rate limits error:', error);
+      }
+    }
+
+    // =========================================================================
+    // Cache Management
+    // =========================================================================
+    async function loadCacheData() {
+      try {
+        const data = await adminFetch('/cache/stats');
+        const summary = data.summary || {};
+
+        document.getElementById('cacheSummary').innerHTML = `
+          <div class="metric">
+            <span>Cache Keys</span>
+            <span class="metric-value">${summary.totalKeys || 0}</span>
+          </div>
+          <div class="metric">
+            <span>Hit Rate</span>
+            <span class="metric-value">${summary.hitRate || '0%'}</span>
+          </div>
+          <div class="metric">
+            <span>Total Hits</span>
+            <span class="metric-value">${summary.totalHits || 0}</span>
+          </div>
+          <div class="metric">
+            <span>Total Misses</span>
+            <span class="metric-value">${summary.totalMisses || 0}</span>
+          </div>
+        `;
+
+        const html = (data.cacheStats || []).map(stat => `
+          <tr>
+            <td>${stat.key}</td>
+            <td>${stat.hits || 0}</td>
+            <td>${stat.misses || 0}</td>
+            <td>${stat.ttl || 'N/A'}</td>
+            <td>
+              <button class="button danger" onclick="deleteCache('${stat.key}');" 
+                style="padding: 5px 10px; font-size: 12px;">Delete</button>
+            </td>
+          </tr>
+        `).join('');
+        document.querySelector('#cacheKeysTable tbody').innerHTML = html ||
+          '<tr><td colspan="5" style="text-align: center; color: #999;">No cache keys</td></tr>';
+      } catch (error) {
+        console.error('Cache error:', error);
+      }
+    }
+
+    // =========================================================================
+    // Users Management
+    // =========================================================================
+    async function loadUsers() {
+      try {
+        const data = await adminFetch('/users?limit=50');
+        const html = (data.users || []).map(user => `
+          <tr>
+            <td>${user.username}</td>
+            <td>${user.email}</td>
+            <td>0</td>
+            <td>${new Date(user.created_at).toLocaleDateString()}</td>
+            <td></td>
+          </tr>
+        `).join('');
+        document.querySelector('#usersTable tbody').innerHTML = html ||
+          '<tr><td colspan="5" style="text-align: center; color: #999;">No users</td></tr>';
+      } catch (error) {
+        console.error('Users error:', error);
+      }
+    }
+
+    // =========================================================================
+    // Items Management
+    // =========================================================================
+    async function loadItems() {
+      try {
+        const data = await adminFetch('/items');
+        const html = (data.items || []).map(item => `
+          <tr>
+            <td>${item.title}</td>
+            <td>${item.description || '-'}</td>
+            <td><strong>${item.score || 0}</strong></td>
+            <td>${item.rank || '-'}</td>
+            <td>${new Date(item.created_at).toLocaleDateString()}</td>
+          </tr>
+        `).join('');
+        document.querySelector('#itemsTable tbody').innerHTML = html ||
+          '<tr><td colspan="5" style="text-align: center; color: #999;">No items</td></tr>';
+      } catch (error) {
+        console.error('Items error:', error);
+      }
+    }
+
+    // =========================================================================
+    // API Logs
+    // =========================================================================
+    async function loadLogs() {
+      try {
+        const data = await adminFetch('/logs?limit=100');
+        const html = (data.logs || []).map(log => `
+          <tr>
+            <td>${log.endpoint}</td>
+            <td>${log.method}</td>
+            <td><span class="status-badge ${log.status_code < 400 ? 'status-ok' : 'status-error'}">${log.status_code}</span></td>
+            <td>${log.response_time_ms || '--'}ms</td>
+            <td>${log.rate_limited ? '✓ Yes' : 'No'}</td>
+            <td>${new Date(log.created_at).toLocaleString()}</td>
+          </tr>
+        `).join('');
+        document.querySelector('#logsTable tbody').innerHTML = html ||
+          '<tr><td colspan="6" style="text-align: center; color: #999;">No logs</td></tr>';
+      } catch (error) {
+        console.error('Logs error:', error);
+      }
+    }
+
+    // =========================================================================
+    // System Information
+    // =========================================================================
+    async function loadSystemInfo() {
+      try {
+        const stats = await adminFetch('/system/stats');
+
+        document.getElementById('systemHealth').innerHTML = `
+          <div class="metric">
+            <span>Redis Version</span>
+            <span class="metric-value">${stats.system.redis.version}</span>
+          </div>
+          <div class="metric">
+            <span>Redis Memory</span>
+            <span class="metric-value">${stats.system.redis.usedMemory}</span>
+          </div>
+        `;
+
+        document.getElementById('serverInfo').innerHTML = `
+          <div class="metric">
+            <span>Total Users</span>
+            <span class="metric-value">${stats.system.database.users}</span>
+          </div>
+          <div class="metric">
+            <span>Total Votes</span>
+            <span class="metric-value">${stats.system.database.votes}</span>
+          </div>
+          <div class="metric">
+            <span>Total Items</span>
+            <span class="metric-value">${stats.system.database.items}</span>
+          </div>
+        `;
+      } catch (error) {
+        console.error('System info error:', error);
+      }
+    }
+
+    // =========================================================================
+    // Action Handlers
+    // =========================================================================
+    async function resetRateLimit(userId) {
+      if (confirm(`Reset rate limit for ${userId}?`)) {
+        try {
+          // TODO: Add API endpoint for resetting rate limit
+          alert('Rate limit reset (endpoint needed)');
+          await loadRateLimits();
+        } catch (error) {
+          alert('Error: ' + error.message);
+        }
+      }
+    }
+
+    async function deleteCache(key) {
+      if (confirm(`Delete cache key: ${key}?`)) {
+        try {
+          await adminFetch(`/cache/key/${key}`, { method: 'DELETE' });
+          alert('Cache key deleted');
+          await loadCacheData();
+        } catch (error) {
+          alert('Error: ' + error.message);
+        }
+      }
+    }
+
+    async function clearAllCache() {
+      if (confirm('Clear ALL cache? This cannot be undone.')) {
+        try {
+          await adminFetch('/cache/clear', { method: 'POST' });
+          alert('All cache cleared');
+          await loadCacheData();
+        } catch (error) {
+          alert('Error: ' + error.message);
+        }
+      }
+    }
+
+    // =========================================================================
+    // Modal Management
+    // =========================================================================
+    function openUserModal() {
+      document.getElementById('userModal').classList.add('show');
+    }
+
+    function openItemModal() {
+      document.getElementById('itemModal').classList.add('show');
+    }
+
+    function closeModal(id) {
+      document.getElementById(id).classList.remove('show');
+    }
+
+    async function saveUser(event) {
+      event.preventDefault();
+      const username = document.getElementById('userUsername').value;
+      const email = document.getElementById('userEmail').value;
+
+      try {
+        // TODO: Add API endpoint for creating user
+        alert('User creation endpoint needed');
+        closeModal('userModal');
+        document.getElementById('userUsername').value = '';
+        document.getElementById('userEmail').value = '';
+        await loadUsers();
+      } catch (error) {
+        alert('Error: ' + error.message);
+      }
+    }
+
+    async function saveItem(event) {
+      event.preventDefault();
+      const title = document.getElementById('itemTitle').value;
+      const description = document.getElementById('itemDescription').value;
+
+      try {
+        await adminFetch('/item', {
+          method: 'POST',
+          body: JSON.stringify({ title, description })
+        });
+        alert('Item created successfully');
+        closeModal('itemModal');
+        document.getElementById('itemTitle').value = '';
+        document.getElementById('itemDescription').value = '';
+        await loadItems();
+      } catch (error) {
+        alert('Error: ' + error.message);
+      }
+    }
+
+    // =========================================================================
+    // Utility Functions
+    // =========================================================================
+    function refreshCurrentSection() {
+      loadSectionData(currentSection);
+    }
+
+    function filterRateLimits() {
+      const search = document.getElementById('rateLimitSearch').value.toLowerCase();
+      document.querySelectorAll('#rateLimitsTable tbody tr').forEach(row => {
+        row.style.display = row.textContent.toLowerCase().includes(search) ? '' : 'none';
+      });
+    }
+
+    function filterUsers() {
+      const search = document.getElementById('usersSearch').value.toLowerCase();
+      document.querySelectorAll('#usersTable tbody tr').forEach(row => {
+        row.style.display = row.textContent.toLowerCase().includes(search) ? '' : 'none';
+      });
+    }
+
+    // =========================================================================
+    // Initialize Dashboard
+    // =========================================================================
+    console.log('🚀 Admin Panel Initialized');
+    document.addEventListener('DOMContentLoaded', function() {
+      showSection('dashboard');
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rate Limiting & API Gateway - Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #333;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    header h1 {
+      color: #667eea;
+      margin-bottom: 10px;
+    }
+
+    .header-info {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      font-size: 14px;
+    }
+
+    .header-info span {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .status-ok { background: #4caf50; color: white; }
+    .status-warning { background: #ff9800; color: white; }
+    .status-error { background: #f44336; color: white; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    .card h2 {
+      color: #667eea;
+      font-size: 18px;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #667eea;
+    }
+
+    .metric {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #eee;
+    }
+
+    .metric:last-child {
+      border-bottom: none;
+    }
+
+    .metric-label {
+      font-weight: 600;
+      color: #666;
+    }
+
+    .metric-value {
+      color: #667eea;
+      font-weight: bold;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #eee;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 10px 0;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4caf50, #45a049);
+      transition: width 0.3s ease;
+    }
+
+    .progress-fill.warning {
+      background: linear-gradient(90deg, #ff9800, #fb8c00);
+    }
+
+    .progress-fill.danger {
+      background: linear-gradient(90deg, #f44336, #e53935);
+    }
+
+    .button {
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-top: 10px;
+      transition: background 0.3s;
+    }
+
+    .button:hover {
+      background: #764ba2;
+    }
+
+    .button.secondary {
+      background: #f44336;
+    }
+
+    .button.secondary:hover {
+      background: #e53935;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #f3f3f3;
+      border-top: 2px solid #667eea;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .leaderboard {
+      margin-top: 20px;
+    }
+
+    .leaderboard-item {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+
+    .rank {
+      min-width: 40px;
+      font-weight: bold;
+      color: #667eea;
+      font-size: 18px;
+    }
+
+    .rank.top3 {
+      font-size: 20px;
+      color: #ffc107;
+      text-shadow: 0 0 2px rgba(0,0,0,0.2);
+    }
+
+    .item-info {
+      flex: 1;
+      margin-left: 15px;
+    }
+
+    .item-title {
+      font-weight: 600;
+      color: #333;
+    }
+
+    .item-score {
+      color: #667eea;
+      font-weight: bold;
+      font-size: 16px;
+    }
+
+    .vote-form {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .vote-form input,
+    .vote-form select {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .vote-form button {
+      background: #4caf50;
+      color: white;
+      border: none;
+      padding: 8px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: background 0.3s;
+    }
+
+    .vote-form button:hover {
+      background: #45a049;
+    }
+
+    .rate-limit-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      margin-top: 10px;
+    }
+
+    .cache-list {
+      margin-top: 15px;
+    }
+
+    .cache-item {
+      padding: 10px;
+      background: #f9f9f9;
+      border-left: 3px solid #667eea;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    .cache-item-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+      font-weight: 600;
+    }
+
+    .cache-hit { color: #4caf50; }
+    .cache-miss { color: #f44336; }
+
+    .simulator {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+      margin-top: 15px;
+    }
+
+    .simulator input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .stat-box {
+      background: white;
+      padding: 10px;
+      border-radius: 4px;
+      text-align: center;
+      border: 1px solid #ddd;
+    }
+
+    .stat-box-value {
+      font-size: 20px;
+      font-weight: bold;
+      color: #667eea;
+    }
+
+    .stat-box-label {
+      font-size: 12px;
+      color: #666;
+      margin-top: 5px;
+    }
+
+    .message {
+      padding: 12px;
+      border-radius: 4px;
+      margin-bottom: 10px;
+      display: none;
+    }
+
+    .message.show {
+      display: block;
+    }
+
+    .message.success {
+      background: #4caf50;
+      color: white;
+    }
+
+    .message.error {
+      background: #f44336;
+      color: white;
+    }
+
+    .message.info {
+      background: #2196f3;
+      color: white;
+    }
+
+    @media (max-width: 768px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header-info {
+        flex-direction: column;
+      }
+
+      .vote-form {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🚀 Rate Limiting & API Gateway Dashboard</h1>
+      <div class="header-info">
+        <span>Status: <span class="status-badge status-ok" id="status">READY</span></span>
+        <span>Users Online: <strong id="usersOnline">0</strong></span>
+        <span>Last Updated: <strong id="lastUpdated">--:--:--</strong></span>
+      </div>
+    </header>
+
+    <div id="message" class="message"></div>
+
+    <div class="grid">
+      <!-- Rate Limit Monitor -->
+      <div class="card">
+        <h2>⚡ Rate Limiting Status</h2>
+        <div id="rateLimitStatus">
+          <div class="metric">
+            <span class="metric-label">Max Requests/60s:</span>
+            <span class="metric-value" id="maxRequests">--</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Requests Used:</span>
+            <span class="metric-value" id="requestsUsed">0/100</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Blocked:</span>
+            <span class="metric-value" id="blocked">0</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressBar" style="width: 0%"></div>
+          </div>
+          <div class="metric">
+            <span class="metric-label">TTL:</span>
+            <span class="metric-value" id="ttl">--</span>
+          </div>
+        </div>
+        <button class="button" onclick="changeUser();">Change User</button>
+      </div>
+
+      <!-- Cache Inspector -->
+      <div class="card">
+        <h2>💾 Cache Inspector</h2>
+        <div id="cacheStats">
+          <div class="metric">
+            <span class="metric-label">Cache Keys:</span>
+            <span class="metric-value" id="cacheKeyCount">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Hit Rate:</span>
+            <span class="metric-value" id="hitRate">0%</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Total Hits:</span>
+            <span class="metric-value" id="totalHits">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Total Misses:</span>
+            <span class="metric-value" id="totalMisses">0</span>
+          </div>
+        </div>
+        <div class="cache-list" id="cacheList"></div>
+        <button class="button" onclick="updateCacheStats();">🔄 Refresh Stats</button>
+      </div>
+
+      <!-- Voting System -->
+      <div class="card">
+        <h2>🗳️ Voting System</h2>
+        <div style="display: flex; gap: 10px; margin-top: 15px;">
+          <input type="text" id="userId" placeholder="User ID" value="user1" style="flex: 1; min-width: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          <input type="text" id="itemId" placeholder="Item ID" value="item1" style="flex: 1; min-width: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          <button class="button" onclick="castVote();" style="background: #4caf50; white-space: nowrap;">Cast Vote</button>
+        </div>
+        <div id="voteStatus" style="margin-top: 10px;"></div>
+      </div>
+
+      <!-- Ranking Leaderboard -->
+      <div class="card">
+        <h2>🏆 Ranking Leaderboard</h2>
+        <div id="leaderboard" class="leaderboard">
+          <div style="text-align: center; color: #999;">
+            <div class="spinner"></div>
+            <div>Loading leaderboard...</div>
+          </div>
+        </div>
+        <button class="button" onclick="updateLeaderboard();">🔄 Refresh</button>
+      </div>
+
+      <!-- Request Simulator -->
+      <div class="card">
+        <h2>🎯 Request Spam Simulator</h2>
+        <div class="simulator">
+          <label>Number of Requests:</label>
+          <input type="number" id="requestCount" value="200" min="1" max="500">
+          <button class="button" id="simButton" onclick="startSpamSimulator();">🚀 Send Requests</button>
+          <div class="stats-grid" id="simulatorStats">
+            <div class="stat-box">
+              <div class="stat-box-value" id="simPassed">0</div>
+              <div class="stat-box-label">Passed</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-value" id="simBlocked">0</div>
+              <div class="stat-box-label">Blocked</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-value" id="simProgress">0%</div>
+              <div class="stat-box-label">Progress</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-value" id="simTime">0s</div>
+              <div class="stat-box-label">Time</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- System Health -->
+      <div class="card">
+        <h2>💊 System Health</h2>
+        <div id="systemHealth">
+          <div class="metric">
+            <span class="metric-label">Database:</span>
+            <span class="metric-value status-badge status-ok">OK</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Redis:</span>
+            <span class="metric-value status-badge status-ok">OK</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">MongoDB:</span>
+            <span class="metric-value status-badge status-ok">OK</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // Global Configuration
+    // =========================================================================
+    let userId = localStorage.getItem('userId') || 'user1';
+    let simulationRunning = false;
+    const API_BASE = window.location.origin;
+
+    // Update timestamp every second
+    setInterval(() => {
+      const now = new Date();
+      document.getElementById('lastUpdated').textContent = now.toLocaleTimeString();
+    }, 1000);
+
+    // =========================================================================
+    // Message Handling
+    // =========================================================================
+    function showMessage(text, type = 'info') {
+      const el = document.getElementById('message');
+      el.textContent = text;
+      el.className = `message show ${type}`;
+      setTimeout(() => el.classList.remove('show'), 4000);
+      console.log(`[${type.toUpperCase()}] ${text}`);
+    }
+
+    // =========================================================================
+    // User Management
+    // =========================================================================
+    function changeUser() {
+      const newUserId = prompt('Enter User ID:', userId) || userId;
+      userId = newUserId;
+      localStorage.setItem('userId', userId);
+      updateRateLimitStatus();
+      showMessage(`User changed to: ${userId}`, 'info');
+    }
+
+    // =========================================================================
+    // Rate Limit Status
+    // =========================================================================
+    async function updateRateLimitStatus() {
+      try {
+        const response = await fetch(`${API_BASE}/api/health`, {
+          headers: { 'x-user-id': userId }
+        });
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const data = await response.json();
+
+        document.getElementById('maxRequests').textContent = '100';
+        document.getElementById('requestsUsed').textContent = 
+          `${data.rateLimitInfo?.allowed || 0}/100`;
+        document.getElementById('blocked').textContent = 
+          data.rateLimitInfo?.blocked || 0;
+        document.getElementById('ttl').textContent = 
+          `${data.rateLimitInfo?.ttl || '--'}s`;
+
+        const percentage = Math.min(((data.rateLimitInfo?.allowed || 0) / 100) * 100, 100);
+        const progressBar = document.getElementById('progressBar');
+        progressBar.style.width = percentage + '%';
+        progressBar.className = 'progress-fill' + 
+          (percentage > 80 ? ' danger' : percentage > 50 ? ' warning' : '');
+
+        updateSystemHealth(data);
+      } catch (error) {
+        console.error('Rate limit update error:', error);
+        document.getElementById('status').className = 'status-badge status-error';
+        document.getElementById('status').textContent = 'ERROR';
+      }
+    }
+
+    // =========================================================================
+    // Cache Statistics
+    // =========================================================================
+    async function updateCacheStats() {
+      try {
+        const response = await fetch(`${API_BASE}/api/cache/stats`);
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const data = await response.json();
+
+        if (!data.success) throw new Error(data.error || 'Unknown error');
+
+        const summary = data.summary || {};
+        document.getElementById('cacheKeyCount').textContent = 
+          summary.totalKeys || 0;
+        document.getElementById('hitRate').textContent = 
+          summary.hitRate || '0.00%';
+        document.getElementById('totalHits').textContent = 
+          summary.totalHits || 0;
+        document.getElementById('totalMisses').textContent = 
+          summary.totalMisses || 0;
+
+        const cacheList = document.getElementById('cacheList');
+        const stats = data.cacheStats || [];
+
+        if (stats.length === 0) {
+          cacheList.innerHTML = '<div class="empty-state">No cache data</div>';
+        } else {
+          cacheList.innerHTML = stats.slice(0, 5).map(item => `
+            <div class="cache-item">
+              <div class="cache-item-header">
+                <span>${item.key || 'unknown'}</span>
+                <span>TTL: ${item.ttl ? item.ttl + 's' : 'no expiry'}</span>
+              </div>
+              <div>
+                <span class="cache-hit">Hits: ${item.hits || 0}</span> | 
+                <span class="cache-miss">Misses: ${item.misses || 0}</span>
+              </div>
+            </div>
+          `).join('');
+        }
+      } catch (error) {
+        console.error('Cache stats error:', error);
+      }
+    }
+
+    // =========================================================================
+    // Voting System
+    // =========================================================================
+    async function castVote() {
+      try {
+        const voteUserId = document.getElementById('userId').value || 'user1';
+        const voteItemId = document.getElementById('itemId').value || 'item1';
+
+        if (!voteUserId.trim() || !voteItemId.trim()) {
+          showMessage('User ID and Item ID are required', 'error');
+          return;
+        }
+
+        const response = await fetch(`${API_BASE}/api/vote`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            userId: voteUserId,
+            itemId: voteItemId,
+            voteValue: 1
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          showMessage(`Vote failed: ${data.error || 'Unknown error'}`, 'error');
+          return;
+        }
+
+        showMessage(`✓ Vote cast! New score: ${data.vote?.newScore || 'N/A'}`, 'success');
+        await updateLeaderboard();
+        await updateCacheStats();
+      } catch (error) {
+        console.error('Vote error:', error);
+        showMessage('Error casting vote: ' + error.message, 'error');
+      }
+    }
+
+    // =========================================================================
+    // Leaderboard
+    // =========================================================================
+    async function updateLeaderboard() {
+      try {
+        const response = await fetch(`${API_BASE}/api/ranking?limit=10`);
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const data = await response.json();
+
+        if (!data.success) throw new Error(data.error || 'Unknown error');
+
+        const leaderboard = document.getElementById('leaderboard');
+        const items = data.items || [];
+
+        if (items.length === 0) {
+          leaderboard.innerHTML = '<div class="empty-state">No items in leaderboard</div>';
+        } else {
+          leaderboard.innerHTML = items.map((item, idx) => `
+            <div class="leaderboard-item">
+              <div class="rank ${idx < 3 ? 'top3' : ''}">#${idx + 1}</div>
+              <div class="item-info">
+                <div class="item-title">${item.title || 'Unknown'}</div>
+                <div style="font-size: 12px; color: #999;">
+                  ${item.description || 'No description'}
+                </div>
+              </div>
+              <div class="item-score">${item.score || 0} votes</div>
+            </div>
+          `).join('');
+        }
+      } catch (error) {
+        console.error('Leaderboard error:', error);
+        const leaderboard = document.getElementById('leaderboard');
+        leaderboard.innerHTML = `<div class="empty-state" style="color: #f44336;">
+          Failed to load leaderboard
+        </div>`;
+      }
+    }
+
+    // =========================================================================
+    // Request Spam Simulator
+    // =========================================================================
+    async function startSpamSimulator() {
+      if (simulationRunning) {
+        showMessage('Simulation already running', 'warning');
+        return;
+      }
+
+      simulationRunning = true;
+      const button = document.getElementById('simButton');
+      button.disabled = true;
+
+      const count = parseInt(document.getElementById('requestCount').value) || 200;
+      let passed = 0, blocked = 0;
+      const start = Date.now();
+
+      try {
+        for (let i = 0; i < count; i++) {
+          try {
+            const response = await fetch(`${API_BASE}/api/health`, {
+              headers: { 'x-user-id': 'spam_user' }
+            });
+
+            if (response.status === 429) {
+              blocked++;
+            } else if (response.ok) {
+              passed++;
+            } else {
+              blocked++;
+            }
+          } catch (error) {
+            blocked++;
+          }
+
+          // Update progress
+          document.getElementById('simPassed').textContent = passed;
+          document.getElementById('simBlocked').textContent = blocked;
+          document.getElementById('simProgress').textContent = 
+            Math.round(((i + 1) / count) * 100) + '%';
+          document.getElementById('simTime').textContent = 
+            ((Date.now() - start) / 1000).toFixed(1) + 's';
+
+          // Add delay to avoid overloading
+          if (i % 20 === 0) await new Promise(r => setTimeout(r, 50));
+        }
+
+        showMessage(
+          `✓ Simulation complete: ${passed} passed, ${blocked} blocked`,
+          'success'
+        );
+      } catch (error) {
+        console.error('Simulation error:', error);
+        showMessage('Simulation error: ' + error.message, 'error');
+      } finally {
+        simulationRunning = false;
+        button.disabled = false;
+      }
+    }
+
+    // =========================================================================
+    // System Health Check
+    // =========================================================================
+    function updateSystemHealth(healthData) {
+      const data = healthData || {};
+
+      const dbStatus = data.postgres === 'connected' ? 'status-ok' : 'status-error';
+      const redisStatus = data.redis === 'connected' ? 'status-ok' : 'status-error';
+      const mongoStatus = data.mongodb === 'connected' ? 'status-ok' : 'status-error';
+
+      document.getElementById('dbStatus').className = 
+        `status-badge ${dbStatus}`;
+      document.getElementById('dbStatus').textContent = 
+        data.postgres === 'connected' ? 'OK' : 'OFFLINE';
+
+      document.getElementById('redisStatus').className = 
+        `status-badge ${redisStatus}`;
+      document.getElementById('redisStatus').textContent = 
+        data.redis === 'connected' ? 'OK' : 'OFFLINE';
+
+      document.getElementById('mongodbStatus').className = 
+        `status-badge ${mongoStatus}`;
+      document.getElementById('mongodbStatus').textContent = 
+        data.mongodb === 'connected' ? 'OK' : 'OFFLINE';
+    }
+
+    // =========================================================================
+    // Auto-refresh: Update dashboard every 5 seconds
+    // =========================================================================
+    async function autoRefresh() {
+      try {
+        await Promise.all([
+          updateRateLimitStatus(),
+          updateCacheStats(),
+          updateLeaderboard()
+        ]);
+      } catch (error) {
+        console.error('Auto-refresh error:', error);
+      }
+    }
+
+    // =========================================================================
+    // Initialize Dashboard
+    // =========================================================================
+    async function initDashboard() {
+      console.log('🚀 Initializing dashboard...');
+      
+      try {
+        await autoRefresh();
+        showMessage(`Welcome! User: ${userId}`, 'success');
+      } catch (error) {
+        console.error('Initialization error:', error);
+        showMessage('Failed to initialize dashboard', 'error');
+      }
+
+      // Setup auto-refresh every 5 seconds
+      setInterval(autoRefresh, 5000);
+    }
+
+    // Start on page load
+    window.addEventListener('load', initDashboard);
+
+    // Also try to start immediately in case load event already fired
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initDashboard);
+    } else {
+      setTimeout(initDashboard, 100);
+    }
+  </script>
+</body>
+</html>

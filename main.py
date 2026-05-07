@@ -17,6 +17,7 @@ from redis_client import (
     set_cached_votes,
 )
 from database import get_db_pool, close_db_pool, insert_votes, fetch_total_votes, get_user_id, get_candidate_id
+from mongodb_logger import close_mongo, log_vote, log_abuse, log_api_call
 
 # ── logging ──────────────────────────────────────────────────────────────────
 import sys
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down – closing connections …")
     await close_redis()
     await close_db_pool()
+    await close_mongo()
     logger.info("Shutdown complete.")
 
 
@@ -103,10 +105,12 @@ async def vote_x_times(
     # ── Resolve IDs from DB ───────────────────────────────────────────────────
     user_id = await get_user_id(db_pool, username)
     if not user_id:
+        await log_api_call("/vote", "POST", 404, error_message=f"User '{username}' not found")
         raise HTTPException(status_code=404, detail=f"User '{username}' not found")
         
     candidate_id = await get_candidate_id(db_pool, candidate_name)
     if not candidate_id:
+        await log_api_call("/vote", "POST", 404, user_id=user_id, error_message=f"Candidate '{candidate_name}' not found")
         raise HTTPException(status_code=404, detail=f"Candidate '{candidate_name}' not found")
 
     # ── Step 1: Redis Lua rate-limit ──────────────────────────────────────────
@@ -114,6 +118,8 @@ async def vote_x_times(
     allowed_x = await rate_limit_check(redis_client, user_id, x)
     if allowed_x == 0:
         logger.warning("  [Step 1] BLOCKED – user=%s exceeded rate limit", username)
+        await log_abuse(user_id, "rate_limit_exceeded", candidate_id, 1)
+        await log_api_call("/vote", "POST", 429, user_id=user_id, error_message="Rate limit exceeded")
         raise HTTPException(
             status_code=429,
             detail=(
@@ -144,6 +150,11 @@ async def vote_x_times(
         updated_total = cached_total + x
         await set_cached_votes(redis_client, candidate_id, updated_total)
 
+        # Log vote to MongoDB
+        status = "partially_allowed" if x < original_x else "success"
+        await log_vote(user_id, candidate_id, x, status)
+        await log_api_call("/vote", "POST", 200, user_id=user_id)
+
         return VoteResponse(
             status="ok",
             candidate_id=candidate_id,
@@ -169,6 +180,11 @@ async def vote_x_times(
     logger.info("  [Step 4] Writing total=%d to Redis (TTL=%ds) …", db_total, settings.cache_ttl_seconds)
     await set_cached_votes(redis_client, candidate_id, db_total)
 
+    # Log vote to MongoDB
+    status = "partially_allowed" if x < original_x else "success"
+    await log_vote(user_id, candidate_id, x, status)
+    await log_api_call("/vote", "POST", 200, user_id=user_id)
+
     return VoteResponse(
         status="ok",
         candidate_id=candidate_id,
@@ -185,4 +201,5 @@ async def vote_x_times(
 # ── health check ──────────────────────────────────────────────────────────────
 @app.get("/health", tags=["Meta"], summary="Health check")
 async def health():
+    await log_api_call("/health", "GET", 200)
     return {"status": "ok"}
