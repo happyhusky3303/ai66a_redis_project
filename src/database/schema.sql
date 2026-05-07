@@ -1,6 +1,14 @@
 -- ─────────────────── Extensions ──────────────
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- ─────────────────── Drop Tables (FK-safe reverse order) ──────────────
+DROP TABLE IF EXISTS api_logs        CASCADE;
+DROP TABLE IF EXISTS rate_limit_stats CASCADE;
+DROP TABLE IF EXISTS votes            CASCADE;
+DROP TABLE IF EXISTS cache_stats      CASCADE;
+DROP TABLE IF EXISTS items            CASCADE;
+DROP TABLE IF EXISTS users            CASCADE;
+
 -- ─────────────────── Users Table ──────────────
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
