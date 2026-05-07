@@ -3,6 +3,7 @@
 let userId = localStorage.getItem('userId') || 'user1';
 let simulationRunning = false;
 let dashboardInitialized = false;
+let availableItems = []; // Store fetched items with UUIDs
 const API_BASE = window.location.origin;
 const HEALTH_REFRESH_MS = 5000;
 const DATA_REFRESH_MS = 15000;
@@ -112,12 +113,48 @@ async function updateCacheStats() {
   }
 }
 
+// Load available items from the database
+async function loadAvailableItems() {
+  try {
+    const response = await fetch(`${API_BASE}/api/ranking?limit=100`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const data = await response.json();
+    availableItems = data.items || data.data || [];
+
+    // Populate itemId dropdown
+    const itemIdSelect = document.getElementById('itemId');
+    if (itemIdSelect && availableItems.length > 0) {
+      // Clear existing options
+      itemIdSelect.innerHTML = '<option value="">Select an item...</option>';
+      
+      // Add all items
+      availableItems.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.title || item.id;
+        itemIdSelect.appendChild(option);
+      });
+      
+      // Auto-select first item
+      if (availableItems.length > 0) {
+        itemIdSelect.value = availableItems[0].id;
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load items:', error);
+  }
+}
+
 async function castVote() {
   try {
     const voteUserId = document.getElementById('userId').value || 'user1';
-    const voteItemId = document.getElementById('itemId').value || 'item1';
+    const voteItemId = document.getElementById('itemId').value;
 
-    if (!voteUserId.trim() || !voteItemId.trim()) {
+    // Use first available item if none selected
+    const itemIdToUse = voteItemId || (availableItems[0]?.id);
+
+    if (!voteUserId.trim() || !itemIdToUse) {
       showMessage('User ID and Item ID are required', 'error');
       return;
     }
@@ -127,7 +164,7 @@ async function castVote() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         userId: voteUserId,
-        itemId: voteItemId,
+        itemId: itemIdToUse,
         voteValue: 1
       })
     });
@@ -156,7 +193,10 @@ async function updateLeaderboard() {
     if (!data.success) throw new Error(data.error || 'Unknown error');
 
     const leaderboard = document.getElementById('leaderboard');
-    const items = data.items || data.data || [];
+    // Handle both response formats: data.items (if cached/returned directly) or data.data (API format)
+    const items = (Array.isArray(data.items) ? data.items : null) || 
+                  (Array.isArray(data.data) ? data.data : null) || 
+                  [];
 
     if (items.length === 0) {
       leaderboard.innerHTML = '<div class="empty-state">No items in leaderboard</div>';
@@ -297,6 +337,7 @@ async function initDashboard() {
   setInterval(updateTimestamp, 1000);
 
   try {
+    await loadAvailableItems(); // Load items for voting form
     await autoRefresh();
     showMessage(`Welcome! User: ${userId}`, 'success');
   } catch (error) {
