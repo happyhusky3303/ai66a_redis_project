@@ -16,6 +16,7 @@
 
 const express = require('express');
 const votingService = require('../services/voting');
+const cacheService = require('../services/cache');
 const { cacheLayerMiddleware, cacheInvalidationMiddleware, getCacheStats } = require('../middleware/cacheLayer');
 const { logRequest } = require('../services/mongodb');
 const { query } = require('../services/postgres');
@@ -75,6 +76,38 @@ router.get('/health', async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/cache/stats
+ * Public cache statistics for dashboard widgets
+ */
+router.get('/cache/stats', async (req, res) => {
+  try {
+    const stats = await cacheService.getAllCacheStats();
+    const totalHits = stats.reduce((sum, entry) => sum + (entry.hits || 0), 0);
+    const totalMisses = stats.reduce((sum, entry) => sum + (entry.misses || 0), 0);
+    const totalRequests = totalHits + totalMisses;
+
+    res.json({
+      success: true,
+      cacheStats: stats,
+      summary: {
+        totalKeys: stats.length,
+        totalHits,
+        totalMisses,
+        hitRate: totalRequests > 0
+          ? `${((totalHits / totalRequests) * 100).toFixed(2)}%`
+          : '0.00%'
+      }
+    });
+  } catch (error) {
+    logger.error('Cache stats endpoint error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load cache statistics'
     });
   }
 });
