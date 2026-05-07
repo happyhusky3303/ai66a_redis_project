@@ -128,6 +128,17 @@ app.get('/health', async (req, res) => {
  */
 app.use('/api', 
   (req, res, next) => {
+    // Health endpoint is for monitoring UI; do not rate limit it.
+    if (req.path === '/health') {
+      req.rateLimitInfo = {
+        allowed: 1,
+        blocked: 0,
+        remaining: 1,
+        bypassed: true
+      };
+      return next();
+    }
+
     // Skip rate limiting for admin requests
     if (req.bypassRateLimit) {
       req.rateLimitInfo = {
