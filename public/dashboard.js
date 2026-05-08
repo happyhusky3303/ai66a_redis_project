@@ -1,16 +1,17 @@
 'use strict';
 
-let userId = localStorage.getItem('userId') || 'user1';
 let simulationRunning = false;
 let dashboardInitialized = false;
 const API_BASE = window.location.origin;
 const AUTH_TOKEN = localStorage.getItem('authToken') || '';
-let authUser = null;
 const HEALTH_REFRESH_MS = 5000;
 const DATA_REFRESH_MS = 15000;
 let healthTimer = null;
 let dataTimer = null;
 let refreshing = false;
+let authUser = null;
+let userId = localStorage.getItem('userId') || '';
+let lastLeaderboardHtml = '';
 
 function logoutUser() {
   localStorage.removeItem('authToken');
@@ -19,17 +20,21 @@ function logoutUser() {
   window.location.href = '/';
 }
 
-function renderCurrentUser() {
+function readAuthUserFromStorage() {
   try {
     const raw = localStorage.getItem('authUser');
     authUser = raw ? JSON.parse(raw) : null;
   } catch (error) {
     authUser = null;
   }
+}
+
+function renderCurrentUser() {
+  readAuthUserFromStorage();
 
   const userLabel = document.getElementById('currentUserLabel');
   if (userLabel) {
-    userLabel.textContent = authUser?.username || userId || '--';
+    userLabel.textContent = authUser?.username || '--';
   }
 }
 
@@ -57,8 +62,9 @@ async function ensureUserRole() {
     return false;
   }
 
+  authUser = data.user;
+  userId = data.user.id;
   localStorage.setItem('authUser', JSON.stringify(data.user));
-  userId = data.user.username;
   localStorage.setItem('userId', userId);
   return true;
 }
@@ -77,14 +83,6 @@ function updateTimestamp() {
   if (timeEl) {
     timeEl.textContent = now.toLocaleTimeString();
   }
-}
-
-function changeUser() {
-  const newUserId = prompt('Enter User ID:', userId) || userId;
-  userId = newUserId;
-  localStorage.setItem('userId', userId);
-  updateRateLimitStatus();
-  showMessage(`User changed to: ${userId}`, 'info');
 }
 
 async function updateRateLimitStatus() {
@@ -128,7 +126,9 @@ async function updateRateLimitStatus() {
 
 async function updateCacheStats() {
   try {
-    const response = await fetch(`${API_BASE}/api/cache/stats`);
+    const response = await fetch(`${API_BASE}/api/cache/stats`, {
+      headers: { 'x-user-id': userId }
+    });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
@@ -165,21 +165,62 @@ async function updateCacheStats() {
   }
 }
 
+async function loadAvailableItems() {
+  const select = document.getElementById('voteItemId');
+  if (!select) return;
+
+  try {
+    select.innerHTML = '<option value="">Loading options...</option>';
+
+    const response = await fetch(`${API_BASE}/api/items?limit=200`, {
+      headers: {
+        Authorization: `Bearer ${AUTH_TOKEN}`,
+        'x-user-id': userId
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to load items');
+    }
+
+    const items = data.items || [];
+    if (!items.length) {
+      select.innerHTML = '<option value="">No options available</option>';
+      return;
+    }
+
+    select.innerHTML = items.map((item) => (
+      `<option value="${item.id}">${item.title}</option>`
+    )).join('');
+  } catch (error) {
+    console.error('Load items error:', error);
+    select.innerHTML = '<option value="">Failed to load options</option>';
+  }
+}
+
 async function castVote() {
   try {
-    const voteUserId = document.getElementById('userId').value || 'user1';
-    const voteItemId = document.getElementById('itemId').value;
+    const voteItemId = document.getElementById('voteItemId').value;
 
-    if (!voteUserId.trim() || !voteItemId.trim()) {
-      showMessage('User ID and Item ID are required', 'error');
+    if (!userId || !voteItemId) {
+      showMessage('Please select an option to vote', 'error');
       return;
     }
 
     const response = await fetch(`${API_BASE}/api/vote`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        Authorization: `Bearer ${AUTH_TOKEN}`,
+        'x-user-id': userId
+      },
       body: JSON.stringify({
-        userId: voteUserId,
+        userId,
         itemId: voteItemId,
         voteValue: 1
       })
@@ -201,18 +242,22 @@ async function castVote() {
 }
 
 async function updateLeaderboard() {
+  const leaderboard = document.getElementById('leaderboard');
+
   try {
-    const response = await fetch(`${API_BASE}/api/ranking?limit=10`);
+    const response = await fetch(`${API_BASE}/api/ranking?limit=10`, {
+      headers: { 'x-user-id': userId }
+    });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
     if (!data.success) throw new Error(data.error || 'Unknown error');
 
-    const leaderboard = document.getElementById('leaderboard');
     const items = data.items || data.data || [];
 
     if (items.length === 0) {
       leaderboard.innerHTML = '<div class="empty-state">No items in leaderboard</div>';
+      lastLeaderboardHtml = leaderboard.innerHTML;
       return;
     }
 
@@ -228,10 +273,14 @@ async function updateLeaderboard() {
         <div class="item-score">${item.score || 0} votes</div>
       </div>
     `).join('');
+
+    lastLeaderboardHtml = leaderboard.innerHTML;
   } catch (error) {
     console.error('Leaderboard error:', error);
-    const leaderboard = document.getElementById('leaderboard');
-    leaderboard.innerHTML = '<div class="empty-state" style="color: #f44336;">Failed to load leaderboard</div>';
+    if (!lastLeaderboardHtml) {
+      leaderboard.innerHTML = '<div class="empty-state" style="color: #f44336;">Failed to load leaderboard</div>';
+    }
+    showMessage('Leaderboard temporary unavailable, keeping previous data', 'info');
   }
 }
 
@@ -342,14 +391,12 @@ async function initDashboard() {
 
   dashboardInitialized = true;
 
-  const changeUserButton = document.getElementById('changeUserButton');
   const refreshCacheButton = document.getElementById('refreshCacheButton');
   const castVoteButton = document.getElementById('castVoteButton');
   const refreshLeaderboardButton = document.getElementById('refreshLeaderboardButton');
   const simButton = document.getElementById('simButton');
   const logoutButton = document.getElementById('logoutButton');
 
-  changeUserButton?.addEventListener('click', changeUser);
   refreshCacheButton?.addEventListener('click', updateCacheStats);
   castVoteButton?.addEventListener('click', castVote);
   refreshLeaderboardButton?.addEventListener('click', updateLeaderboard);
@@ -361,9 +408,9 @@ async function initDashboard() {
   setInterval(updateTimestamp, 1000);
 
   try {
-    await loadAvailableItems(); // Load items for voting form
+    await loadAvailableItems();
     await autoRefresh();
-    showMessage(`Welcome! User: ${userId}`, 'success');
+    showMessage(`Welcome! User: ${authUser?.username || '--'}`, 'success');
   } catch (error) {
     console.error('Initialization error:', error);
     showMessage('Failed to initialize dashboard', 'error');
