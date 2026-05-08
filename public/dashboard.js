@@ -203,13 +203,8 @@ async function loadAvailableItems() {
 
 async function castVote() {
   try {
-<<<<<<< HEAD
-    const voteUserId = currentUser?.username || document.getElementById('userId').value || 'user1';
-    const voteItemId = document.getElementById('itemId').value || 'item1';
-=======
     const voteUserId = document.getElementById('userId').value || 'user1';
     const voteItemId = document.getElementById('itemId').value;
->>>>>>> 8dd013543d102ed4789afe8090326209de036ecf
 
     // Use first available item if none selected
     const itemIdToUse = voteItemId || (availableItems[0]?.id);
@@ -408,11 +403,7 @@ async function initDashboard() {
   setInterval(updateTimestamp, 1000);
 
   try {
-<<<<<<< HEAD
-    await loadCurrentUser();
-=======
     await loadAvailableItems(); // Load items for voting form
->>>>>>> 8dd013543d102ed4789afe8090326209de036ecf
     await autoRefresh();
     showMessage(`Welcome! User: ${currentUser?.username || userId}`, 'success');
   } catch (error) {
