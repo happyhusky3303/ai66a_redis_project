@@ -168,7 +168,7 @@ async function updateCacheStats() {
 async function castVote() {
   try {
     const voteUserId = document.getElementById('userId').value || 'user1';
-    const voteItemId = document.getElementById('itemId').value || 'item1';
+    const voteItemId = document.getElementById('itemId').value;
 
     if (!voteUserId.trim() || !voteItemId.trim()) {
       showMessage('User ID and Item ID are required', 'error');
@@ -361,6 +361,7 @@ async function initDashboard() {
   setInterval(updateTimestamp, 1000);
 
   try {
+    await loadAvailableItems(); // Load items for voting form
     await autoRefresh();
     showMessage(`Welcome! User: ${userId}`, 'success');
   } catch (error) {
