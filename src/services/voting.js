@@ -200,10 +200,11 @@ class VotingService {
    * Uses Redis Sorted Set for O(log N) performance
    */
   async getTopItems(limit = 10, offset = 0) {
+    limit = Math.min(parseInt(limit) || 10, 100);
+    offset = Math.max(parseInt(offset) || 0, 0);
+
     try {
       const client = getRedisClient();
-      limit = Math.min(parseInt(limit) || 10, 100);
-      offset = Math.max(parseInt(offset) || 0, 0);
 
       // ─────────────── GET FROM REDIS LEADERBOARD ───────────────
       // O(log N + M) where M is the number of returned items
@@ -215,7 +216,7 @@ class VotingService {
       );
 
       if (topItems.length === 0) {
-        return [];
+        return this.getTopItemsFromPostgres(limit, offset);
       }
 
       // ─────────────── FETCH ITEM DETAILS FROM POSTGRESQL ───────────────
@@ -246,9 +247,25 @@ class VotingService {
 
       return results;
     } catch (error) {
-      logger.error('GetTopItems error:', error);
-      throw error;
+      logger.warn(`GetTopItems fallback to PostgreSQL: ${error.message}`);
+      return this.getTopItemsFromPostgres(limit, offset);
     }
+  }
+
+  async getTopItemsFromPostgres(limit = 10, offset = 0) {
+    const pgResult = await query(
+      `SELECT id, title, description, score, created_at, updated_at
+       FROM items
+       ORDER BY score DESC, created_at ASC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    return pgResult.rows.map((item, index) => ({
+      ...item,
+      score: parseInt(item.score || 0, 10),
+      rank: offset + index + 1
+    }));
   }
 
   /**
