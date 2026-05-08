@@ -46,6 +46,19 @@ const initPostgres = async () => {
 
 const initSchema = async () => {
   try {
+    // Check if tables already exist
+    const result = await pool.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables 
+        WHERE table_schema = 'public' AND table_name = 'users'
+      )
+    `);
+    
+    if (result.rows[0].exists) {
+      logger.info('Database schema already exists, skipping initialization');
+      return;
+    }
+
     const schemaPath = path.join(__dirname, '../database/schema.sql');
     const schema = fs.readFileSync(schemaPath, 'utf-8');
     
