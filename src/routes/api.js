@@ -333,4 +333,39 @@ router.get('/stats', async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/items
+ * Get all votable items (regardless of vote count)
+ *
+ * Query params:
+ * - limit: Max rows to return (default: 200, max: 500)
+ * - offset: Pagination offset (default: 0)
+ */
+router.get('/items', async (req, res, next) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+
+    const result = await query(
+      `SELECT id, title, description, score, created_at, updated_at
+       FROM items
+       ORDER BY title ASC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    res.json({
+      success: true,
+      items: result.rows.map(item => ({
+        ...item,
+        score: parseInt(item.score || 0, 10)
+      })),
+      count: result.rows.length
+    });
+  } catch (error) {
+    logger.error('GetItems error:', error);
+    next(error);
+  }
+});
+
 module.exports = router;
