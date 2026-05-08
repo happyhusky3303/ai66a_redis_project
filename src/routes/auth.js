@@ -95,6 +95,7 @@ router.post('/login', async (req, res) => {
     await ensureAuthColumns();
     const payload = await loginSchema.validateAsync(req.body, { abortEarly: false });
     const identifier = payload.identifier.toLowerCase();
+    console.log(`Login attempt for identifier: ${identifier}`);
 
     const result = await query(
       `SELECT id, username, email, password_hash, full_name, role, created_at, last_login_at
@@ -104,7 +105,9 @@ router.post('/login', async (req, res) => {
       [identifier]
     );
 
+    console.log(`User lookup result: ${result.rows.length} rows found`);
     if (result.rows.length === 0) {
+      console.log(`No user found for identifier: ${identifier}`);
       return res.status(401).json({
         success: false,
         error: 'Invalid credentials'
@@ -112,7 +115,19 @@ router.post('/login', async (req, res) => {
     }
 
     const row = result.rows[0];
+    console.log(`Found user: ${row.username}, password_hash present: ${!!row.password_hash}`);
+    
+    if (!row.password_hash) {
+      console.log(`No password hash for user: ${row.username}`);
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid credentials'
+      });
+    }
+
     const ok = verifyPassword(payload.password, row.password_hash);
+    console.log(`Password verification result: ${ok}`);
+    
     if (!ok) {
       return res.status(401).json({
         success: false,
