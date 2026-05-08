@@ -3,65 +3,64 @@
 let userId = localStorage.getItem('userId') || 'user1';
 let simulationRunning = false;
 let dashboardInitialized = false;
-let availableItems = []; // Store fetched items with UUIDs
 const API_BASE = window.location.origin;
-let authToken = localStorage.getItem('authToken') || '';
-let currentUser = null;
+const AUTH_TOKEN = localStorage.getItem('authToken') || '';
+let authUser = null;
 const HEALTH_REFRESH_MS = 5000;
 const DATA_REFRESH_MS = 15000;
 let healthTimer = null;
 let dataTimer = null;
 let refreshing = false;
 
-function logout() {
+function logoutUser() {
   localStorage.removeItem('authToken');
   localStorage.removeItem('authUser');
+  localStorage.removeItem('userId');
   window.location.href = '/';
 }
 
-function getAuthHeaders(extraHeaders = {}) {
-  return {
-    Authorization: `Bearer ${authToken}`,
-    ...extraHeaders
-  };
-}
-
-async function loadCurrentUser() {
-  const response = await fetch(`${API_BASE}/auth/me`, {
-    headers: getAuthHeaders()
-  });
-
-  if (response.status === 401) {
-    logout();
-    return null;
+function renderCurrentUser() {
+  try {
+    const raw = localStorage.getItem('authUser');
+    authUser = raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    authUser = null;
   }
-
-  if (!response.ok) {
-    throw new Error(`Failed to load profile (${response.status})`);
-  }
-
-  const data = await response.json();
-  if (!data.success || !data.user) {
-    throw new Error('Invalid profile response');
-  }
-
-  currentUser = data.user;
-  userId = currentUser.username;
-  localStorage.setItem('userId', userId);
-  localStorage.setItem('authUser', JSON.stringify(currentUser));
 
   const userLabel = document.getElementById('currentUserLabel');
   if (userLabel) {
-    userLabel.textContent = `${currentUser.fullName || currentUser.username} (${currentUser.role || 'user'})`;
+    userLabel.textContent = authUser?.username || userId || '--';
+  }
+}
+
+async function ensureUserRole() {
+  const response = await fetch(`${API_BASE}/auth/me`, {
+    headers: { Authorization: `Bearer ${AUTH_TOKEN}` }
+  });
+
+  if (!response.ok) {
+    logoutUser();
+    return false;
   }
 
-  const userInput = document.getElementById('userId');
-  if (userInput) {
-    userInput.value = currentUser.username;
-    userInput.readOnly = true;
+  const data = await response.json();
+  if (!data?.success || !data.user) {
+    logoutUser();
+    return false;
   }
 
-  return currentUser;
+  if (data.user.role === 'admin') {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('authUser');
+    localStorage.removeItem('userId');
+    window.location.href = '/admin';
+    return false;
+  }
+
+  localStorage.setItem('authUser', JSON.stringify(data.user));
+  userId = data.user.username;
+  localStorage.setItem('userId', userId);
+  return true;
 }
 
 function showMessage(text, type = 'info') {
@@ -91,7 +90,7 @@ function changeUser() {
 async function updateRateLimitStatus() {
   try {
     const response = await fetch(`${API_BASE}/api/health`, {
-      headers: getAuthHeaders({ 'x-user-id': userId })
+      headers: { 'x-user-id': userId }
     });
 
     if (response.status === 429) {
@@ -129,9 +128,7 @@ async function updateRateLimitStatus() {
 
 async function updateCacheStats() {
   try {
-    const response = await fetch(`${API_BASE}/api/cache/stats`, {
-      headers: getAuthHeaders({ 'x-user-id': userId })
-    });
+    const response = await fetch(`${API_BASE}/api/cache/stats`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
@@ -168,66 +165,22 @@ async function updateCacheStats() {
   }
 }
 
-// Load available items from the database
-async function loadAvailableItems() {
-  try {
-    const response = await fetch(`${API_BASE}/api/ranking?limit=100`);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-    const data = await response.json();
-    availableItems = data.items || data.data || [];
-
-    // Populate itemId dropdown
-    const itemIdSelect = document.getElementById('itemId');
-    if (itemIdSelect && availableItems.length > 0) {
-      // Clear existing options
-      itemIdSelect.innerHTML = '<option value="">Select an item...</option>';
-      
-      // Add all items
-      availableItems.forEach(item => {
-        const option = document.createElement('option');
-        option.value = item.id;
-        option.textContent = item.title || item.id;
-        itemIdSelect.appendChild(option);
-      });
-      
-      // Auto-select first item
-      if (availableItems.length > 0) {
-        itemIdSelect.value = availableItems[0].id;
-      }
-    }
-  } catch (error) {
-    console.error('Failed to load items:', error);
-  }
-}
-
 async function castVote() {
   try {
-<<<<<<< HEAD
-    const voteUserId = currentUser?.username || document.getElementById('userId').value || 'user1';
-    const voteItemId = document.getElementById('itemId').value || 'item1';
-=======
     const voteUserId = document.getElementById('userId').value || 'user1';
-    const voteItemId = document.getElementById('itemId').value;
->>>>>>> 8dd013543d102ed4789afe8090326209de036ecf
+    const voteItemId = document.getElementById('itemId').value || 'item1';
 
-    // Use first available item if none selected
-    const itemIdToUse = voteItemId || (availableItems[0]?.id);
-
-    if (!voteUserId.trim() || !itemIdToUse) {
+    if (!voteUserId.trim() || !voteItemId.trim()) {
       showMessage('User ID and Item ID are required', 'error');
       return;
     }
 
     const response = await fetch(`${API_BASE}/api/vote`, {
       method: 'POST',
-      headers: getAuthHeaders({
-        'content-type': 'application/json',
-        'x-user-id': userId
-      }),
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         userId: voteUserId,
-        itemId: itemIdToUse,
+        itemId: voteItemId,
         voteValue: 1
       })
     });
@@ -249,19 +202,14 @@ async function castVote() {
 
 async function updateLeaderboard() {
   try {
-    const response = await fetch(`${API_BASE}/api/ranking?limit=10`, {
-      headers: getAuthHeaders({ 'x-user-id': userId })
-    });
+    const response = await fetch(`${API_BASE}/api/ranking?limit=10`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
     if (!data.success) throw new Error(data.error || 'Unknown error');
 
     const leaderboard = document.getElementById('leaderboard');
-    // Handle both response formats: data.items (if cached/returned directly) or data.data (API format)
-    const items = (Array.isArray(data.items) ? data.items : null) || 
-                  (Array.isArray(data.data) ? data.data : null) || 
-                  [];
+    const items = data.items || data.data || [];
 
     if (items.length === 0) {
       leaderboard.innerHTML = '<div class="empty-state">No items in leaderboard</div>';
@@ -306,7 +254,7 @@ async function startSpamSimulator() {
     for (let i = 0; i < count; i += 1) {
       try {
         const response = await fetch(`${API_BASE}/api/health`, {
-          headers: getAuthHeaders({ 'x-user-id': 'spam_user' })
+          headers: { 'x-user-id': 'spam_user' }
         });
 
         if (response.status === 429) {
@@ -384,10 +332,14 @@ async function autoRefresh() {
 
 async function initDashboard() {
   if (dashboardInitialized) return;
-  if (!authToken) {
+  if (!AUTH_TOKEN) {
     window.location.href = '/';
     return;
   }
+
+  const validRole = await ensureUserRole();
+  if (!validRole) return;
+
   dashboardInitialized = true;
 
   const changeUserButton = document.getElementById('changeUserButton');
@@ -402,19 +354,15 @@ async function initDashboard() {
   castVoteButton?.addEventListener('click', castVote);
   refreshLeaderboardButton?.addEventListener('click', updateLeaderboard);
   simButton?.addEventListener('click', startSpamSimulator);
-  logoutButton?.addEventListener('click', logout);
+  logoutButton?.addEventListener('click', logoutUser);
 
+  renderCurrentUser();
   updateTimestamp();
   setInterval(updateTimestamp, 1000);
 
   try {
-<<<<<<< HEAD
-    await loadCurrentUser();
-=======
-    await loadAvailableItems(); // Load items for voting form
->>>>>>> 8dd013543d102ed4789afe8090326209de036ecf
     await autoRefresh();
-    showMessage(`Welcome! User: ${currentUser?.username || userId}`, 'success');
+    showMessage(`Welcome! User: ${userId}`, 'success');
   } catch (error) {
     console.error('Initialization error:', error);
     showMessage('Failed to initialize dashboard', 'error');

@@ -90,12 +90,30 @@ CREATE INDEX IF NOT EXISTS idx_rate_limit_stats_user_id ON rate_limit_stats(user
 -- ============================================================================
 -- Sample Data (Optional)
 -- ============================================================================
--- Insert sample users if table is empty
-INSERT INTO users (username, email) VALUES
-  ('admin', 'admin@voting.local'),
-  ('user1', 'user1@voting.local'),
-  ('user2', 'user2@voting.local')
-ON CONFLICT (username) DO NOTHING;
+-- Insert / update auth-ready users (default user password: Legacy@123)
+INSERT INTO users (username, email, full_name, role, password_hash) VALUES
+  ('user1', 'user1@example.com', 'Demo User 1', 'user', '3a711fa7cc3ae86ab4f6797b14bd3309:7f7b597bb1f407c45eac68a379fcb930e3aed8e09dec9d2e4e30edd67f0ddf9417a2580733e8a06b9c8cfcbadebad76f4f9b82d1dab1265560a8019b9679486b'),
+  ('user2', 'user2@example.com', 'Demo User 2', 'user', '3a711fa7cc3ae86ab4f6797b14bd3309:7f7b597bb1f407c45eac68a379fcb930e3aed8e09dec9d2e4e30edd67f0ddf9417a2580733e8a06b9c8cfcbadebad76f4f9b82d1dab1265560a8019b9679486b'),
+  ('hoa_demo', 'hoa_demo@example.com', 'Hoa Demo', 'user', '3a711fa7cc3ae86ab4f6797b14bd3309:7f7b597bb1f407c45eac68a379fcb930e3aed8e09dec9d2e4e30edd67f0ddf9417a2580733e8a06b9c8cfcbadebad76f4f9b82d1dab1265560a8019b9679486b'),
+  ('tranvanc', 'tranvanc@example.com', 'Tran Van C', 'user', '3a711fa7cc3ae86ab4f6797b14bd3309:7f7b597bb1f407c45eac68a379fcb930e3aed8e09dec9d2e4e30edd67f0ddf9417a2580733e8a06b9c8cfcbadebad76f4f9b82d1dab1265560a8019b9679486b'),
+  ('lethib', 'lethib@example.com', 'Le Thi B', 'user', '3a711fa7cc3ae86ab4f6797b14bd3309:7f7b597bb1f407c45eac68a379fcb930e3aed8e09dec9d2e4e30edd67f0ddf9417a2580733e8a06b9c8cfcbadebad76f4f9b82d1dab1265560a8019b9679486b'),
+  ('nguyenvana', 'nguyenvana@example.com', 'Nguyen Van A', 'user', '3a711fa7cc3ae86ab4f6797b14bd3309:7f7b597bb1f407c45eac68a379fcb930e3aed8e09dec9d2e4e30edd67f0ddf9417a2580733e8a06b9c8cfcbadebad76f4f9b82d1dab1265560a8019b9679486b')
+ON CONFLICT (username) DO UPDATE
+SET email = EXCLUDED.email,
+    full_name = EXCLUDED.full_name,
+    role = 'user',
+    password_hash = EXCLUDED.password_hash,
+    updated_at = CURRENT_TIMESTAMP;
+
+-- Dedicated admin account (password: Admin@123)
+INSERT INTO users (username, email, full_name, role, password_hash) VALUES
+  ('admin_master', 'admin_master@voting.local', 'System Administrator', 'admin', '319a99f8735de116d11470aa24bd7845:1bb34ce14e9de4418bf9aabed6f7bf92ab74b4ad171fe3e598a72c8a4cb8e58da1b0d00691d048b84b3660b8678fb36a820414c45cc652e3cf449e68fef23439')
+ON CONFLICT (username) DO UPDATE
+SET email = EXCLUDED.email,
+    full_name = EXCLUDED.full_name,
+    role = 'admin',
+    password_hash = EXCLUDED.password_hash,
+    updated_at = CURRENT_TIMESTAMP;
 
 -- Insert sample items if table is empty
 INSERT INTO items (title, description) VALUES

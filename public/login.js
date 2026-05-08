@@ -8,6 +8,12 @@ function showMessage(text, type = 'error') {
   el.className = `message show ${type}`;
 }
 
+function clearUserSession() {
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('authUser');
+  localStorage.removeItem('userId');
+}
+
 function switchTab(mode) {
   const loginForm = document.getElementById('loginForm');
   const registerForm = document.getElementById('registerForm');
@@ -42,6 +48,12 @@ async function handleLogin(event) {
 
     if (!response.ok || !data.success) {
       showMessage(data.error || 'Login failed', 'error');
+      return;
+    }
+
+    if (data.user?.role === 'admin') {
+      showMessage('Tài khoản admin không được đăng nhập web user. Hãy vào /admin', 'error');
+      clearUserSession();
       return;
     }
 
@@ -100,11 +112,16 @@ async function checkAlreadyLoggedIn() {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (response.ok) {
+      const data = await response.json();
+      if (data?.success && data.user?.role === 'admin') {
+        clearUserSession();
+        window.location.href = '/admin';
+        return;
+      }
       window.location.href = '/dashboard';
     }
   } catch (error) {
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('authUser');
+    clearUserSession();
   }
 }
 

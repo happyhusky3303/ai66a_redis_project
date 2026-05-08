@@ -153,15 +153,15 @@
     }
 
     .header-actions {
-      display: flex;
-      gap: 8px;
-      align-items: center;
       margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
-    .small-button {
+    .button.small {
       margin-top: 0;
-      padding: 6px 12px;
+      padding: 6px 10px;
       font-size: 12px;
     }
 
@@ -378,7 +378,7 @@
         <span>Signed in: <strong id="currentUserLabel">--</strong></span>
         <span>Last Updated: <strong id="lastUpdated">--:--:--</strong></span>
         <div class="header-actions">
-          <button class="button secondary small-button" id="logoutButton">Logout</button>
+          <button class="button secondary small" id="logoutButton">Logout</button>
         </div>
       </div>
     </header>
@@ -443,9 +443,7 @@
         <h2>🗳️ Voting System</h2>
         <div style="display: flex; gap: 10px; margin-top: 15px;">
           <input type="text" id="userId" placeholder="User ID" value="user1" style="flex: 1; min-width: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-          <select id="itemId" style="flex: 1; min-width: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-            <option value="">Select an item...</option>
-          </select>
+          <input type="text" id="itemId" placeholder="Item ID" value="item1" style="flex: 1; min-width: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
           <button class="button" id="castVoteButton" style="background: #4caf50; white-space: nowrap;">Cast Vote</button>
         </div>
         <div id="voteStatus" style="margin-top: 10px;"></div>
