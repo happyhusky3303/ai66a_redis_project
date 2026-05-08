@@ -3,6 +3,7 @@ const { getRedisClient } = require('../services/redis');
 const { query } = require('../services/postgres');
 const cacheLayer = require('../services/cache');
 const logger = require('../utils/logger');
+const { verifyToken, getBearerToken } = require('../services/auth');
 
 const router = express.Router();
 
@@ -30,8 +31,18 @@ const parseRedisInfo = (infoText) => {
 // ─────────────────── Admin Authentication ──────────────
 
 const adminAuth = (req, res, next) => {
-  if (!process.env.ADMIN_API_KEY) {
-    return res.status(503).json({ error: 'Admin API key is not configured on server' });
+  const bearer = getBearerToken(req);
+  if (bearer) {
+    try {
+      const payload = verifyToken(bearer);
+      if (payload.role === 'admin') {
+        req.adminUser = payload;
+        return next();
+      }
+      return res.status(403).json({ error: 'Forbidden: admin role required' });
+    } catch (error) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
   }
 
   const apiKey = req.headers['x-admin-api-key'];

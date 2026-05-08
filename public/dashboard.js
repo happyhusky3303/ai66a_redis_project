@@ -4,11 +4,64 @@ let userId = localStorage.getItem('userId') || 'user1';
 let simulationRunning = false;
 let dashboardInitialized = false;
 const API_BASE = window.location.origin;
+let authToken = localStorage.getItem('authToken') || '';
+let currentUser = null;
 const HEALTH_REFRESH_MS = 5000;
 const DATA_REFRESH_MS = 15000;
 let healthTimer = null;
 let dataTimer = null;
 let refreshing = false;
+
+function logout() {
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('authUser');
+  window.location.href = '/';
+}
+
+function getAuthHeaders(extraHeaders = {}) {
+  return {
+    Authorization: `Bearer ${authToken}`,
+    ...extraHeaders
+  };
+}
+
+async function loadCurrentUser() {
+  const response = await fetch(`${API_BASE}/auth/me`, {
+    headers: getAuthHeaders()
+  });
+
+  if (response.status === 401) {
+    logout();
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Failed to load profile (${response.status})`);
+  }
+
+  const data = await response.json();
+  if (!data.success || !data.user) {
+    throw new Error('Invalid profile response');
+  }
+
+  currentUser = data.user;
+  userId = currentUser.username;
+  localStorage.setItem('userId', userId);
+  localStorage.setItem('authUser', JSON.stringify(currentUser));
+
+  const userLabel = document.getElementById('currentUserLabel');
+  if (userLabel) {
+    userLabel.textContent = `${currentUser.fullName || currentUser.username} (${currentUser.role || 'user'})`;
+  }
+
+  const userInput = document.getElementById('userId');
+  if (userInput) {
+    userInput.value = currentUser.username;
+    userInput.readOnly = true;
+  }
+
+  return currentUser;
+}
 
 function showMessage(text, type = 'info') {
   const el = document.getElementById('message');
@@ -37,7 +90,7 @@ function changeUser() {
 async function updateRateLimitStatus() {
   try {
     const response = await fetch(`${API_BASE}/api/health`, {
-      headers: { 'x-user-id': userId }
+      headers: getAuthHeaders({ 'x-user-id': userId })
     });
 
     if (response.status === 429) {
@@ -75,7 +128,9 @@ async function updateRateLimitStatus() {
 
 async function updateCacheStats() {
   try {
-    const response = await fetch(`${API_BASE}/api/cache/stats`);
+    const response = await fetch(`${API_BASE}/api/cache/stats`, {
+      headers: getAuthHeaders({ 'x-user-id': userId })
+    });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
@@ -114,7 +169,7 @@ async function updateCacheStats() {
 
 async function castVote() {
   try {
-    const voteUserId = document.getElementById('userId').value || 'user1';
+    const voteUserId = currentUser?.username || document.getElementById('userId').value || 'user1';
     const voteItemId = document.getElementById('itemId').value || 'item1';
 
     if (!voteUserId.trim() || !voteItemId.trim()) {
@@ -124,7 +179,10 @@ async function castVote() {
 
     const response = await fetch(`${API_BASE}/api/vote`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: getAuthHeaders({
+        'content-type': 'application/json',
+        'x-user-id': userId
+      }),
       body: JSON.stringify({
         userId: voteUserId,
         itemId: voteItemId,
@@ -149,7 +207,9 @@ async function castVote() {
 
 async function updateLeaderboard() {
   try {
-    const response = await fetch(`${API_BASE}/api/ranking?limit=10`);
+    const response = await fetch(`${API_BASE}/api/ranking?limit=10`, {
+      headers: getAuthHeaders({ 'x-user-id': userId })
+    });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
@@ -201,7 +261,7 @@ async function startSpamSimulator() {
     for (let i = 0; i < count; i += 1) {
       try {
         const response = await fetch(`${API_BASE}/api/health`, {
-          headers: { 'x-user-id': 'spam_user' }
+          headers: getAuthHeaders({ 'x-user-id': 'spam_user' })
         });
 
         if (response.status === 429) {
@@ -279,6 +339,10 @@ async function autoRefresh() {
 
 async function initDashboard() {
   if (dashboardInitialized) return;
+  if (!authToken) {
+    window.location.href = '/';
+    return;
+  }
   dashboardInitialized = true;
 
   const changeUserButton = document.getElementById('changeUserButton');
@@ -286,19 +350,22 @@ async function initDashboard() {
   const castVoteButton = document.getElementById('castVoteButton');
   const refreshLeaderboardButton = document.getElementById('refreshLeaderboardButton');
   const simButton = document.getElementById('simButton');
+  const logoutButton = document.getElementById('logoutButton');
 
   changeUserButton?.addEventListener('click', changeUser);
   refreshCacheButton?.addEventListener('click', updateCacheStats);
   castVoteButton?.addEventListener('click', castVote);
   refreshLeaderboardButton?.addEventListener('click', updateLeaderboard);
   simButton?.addEventListener('click', startSpamSimulator);
+  logoutButton?.addEventListener('click', logout);
 
   updateTimestamp();
   setInterval(updateTimestamp, 1000);
 
   try {
+    await loadCurrentUser();
     await autoRefresh();
-    showMessage(`Welcome! User: ${userId}`, 'success');
+    showMessage(`Welcome! User: ${currentUser?.username || userId}`, 'success');
   } catch (error) {
     console.error('Initialization error:', error);
     showMessage('Failed to initialize dashboard', 'error');

@@ -3,19 +3,50 @@
     // =========================================================================
     // Global state
     // =========================================================================
-    const ADMIN_API_KEY = localStorage.getItem('adminApiKey') || 
-                          prompt('Enter Admin API Key:', 'your_secret_admin_key_here') || 
-                          'your_secret_admin_key_here';
-    localStorage.setItem('adminApiKey', ADMIN_API_KEY);
-    
+    const ADMIN_AUTH_TOKEN = localStorage.getItem('adminAuthToken') || '';
+    let adminUser = null;
     let currentSection = 'dashboard';
+
+    function logoutAdmin() {
+      localStorage.removeItem('adminAuthToken');
+      localStorage.removeItem('adminUser');
+      window.location.href = '/admin';
+    }
+
+    async function loadAdminProfile() {
+      if (!ADMIN_AUTH_TOKEN) {
+        logoutAdmin();
+        return;
+      }
+
+      const response = await fetch('/auth/me', {
+        headers: { Authorization: `Bearer ${ADMIN_AUTH_TOKEN}` }
+      });
+
+      if (!response.ok) {
+        logoutAdmin();
+        return;
+      }
+
+      const data = await response.json();
+      if (!data.success || !data.user || data.user.role !== 'admin') {
+        logoutAdmin();
+        return;
+      }
+
+      adminUser = data.user;
+      const identity = document.getElementById('adminIdentity');
+      if (identity) {
+        identity.textContent = `${adminUser.fullName || adminUser.username} (admin)`;
+      }
+    }
 
     // Helper: Make admin API call
     async function adminFetch(endpoint, options = {}) {
       const response = await fetch(`/admin/api${endpoint}`, {
         ...options,
         headers: {
-          'x-admin-api-key': ADMIN_API_KEY,
+          Authorization: `Bearer ${ADMIN_AUTH_TOKEN}`,
           'content-type': 'application/json',
           ...options.headers
         }
@@ -478,6 +509,11 @@
         refreshCurrentSection();
       });
 
+      document.getElementById('adminLogoutButton')?.addEventListener('click', (event) => {
+        event.preventDefault();
+        logoutAdmin();
+      });
+
       document.getElementById('clearAllCacheButton')?.addEventListener('click', (event) => {
         event.preventDefault();
         clearAllCache();
@@ -529,7 +565,8 @@
     // Initialize Dashboard
     // =========================================================================
     console.log('🚀 Admin Panel Initialized');
-    document.addEventListener('DOMContentLoaded', function() {
+    document.addEventListener('DOMContentLoaded', async function() {
+      await loadAdminProfile();
       setupEventListeners();
       showSection('dashboard');
     });
