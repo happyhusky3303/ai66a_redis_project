@@ -20,6 +20,7 @@ const cacheService = require('../services/cache');
 const { cacheLayerMiddleware, cacheInvalidationMiddleware, getCacheStats } = require('../middleware/cacheLayer');
 const { logRequest } = require('../services/mongodb');
 const { query } = require('../services/postgres');
+const redisScripts = require('../utils/redisScripts');
 const logger = require('../utils/logger');
 
 const router = express.Router();
@@ -59,6 +60,19 @@ router.get('/health', async (req, res) => {
     }
 
     const responseTime = Date.now() - startTime;
+    const maxRequests = parseInt(
+      process.env.RATE_LIMIT_MAX_REQUESTS ||
+      process.env.RATE_LIMIT_MAX_VOTES ||
+      100,
+      10
+    );
+    const windowSeconds = parseInt(process.env.RATE_LIMIT_WINDOW_SECONDS || '60', 10);
+    const rateLimitUserId = req.headers['x-user-id'] || req.headers['x-api-key'] || req.ip;
+    const rateLimitInfo = await redisScripts.getRateLimitStatus(
+      rateLimitUserId,
+      maxRequests,
+      windowSeconds
+    );
 
     res.json({
       status: 'ok',
@@ -69,7 +83,7 @@ router.get('/health', async (req, res) => {
         mongodb: mongodbStatus,
         redis: 'connected'
       },
-      rateLimitInfo: req.rateLimitInfo
+      rateLimitInfo
     });
   } catch (error) {
     logger.error('Health check error:', error);
@@ -90,12 +104,13 @@ router.get('/cache/stats', async (req, res) => {
     const totalHits = stats.reduce((sum, entry) => sum + (entry.hits || 0), 0);
     const totalMisses = stats.reduce((sum, entry) => sum + (entry.misses || 0), 0);
     const totalRequests = totalHits + totalMisses;
+    const activeKeys = stats.filter((entry) => entry.exists !== false).length;
 
     res.json({
       success: true,
       cacheStats: stats,
       summary: {
-        totalKeys: stats.length,
+        totalKeys: activeKeys,
         totalHits,
         totalMisses,
         hitRate: totalRequests > 0

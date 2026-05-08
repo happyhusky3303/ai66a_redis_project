@@ -156,6 +156,7 @@ async function cacheResponse(client, cacheKey, data, ttl = 300) {
   try {
     const jsonData = JSON.stringify(data);
     await client.setEx(cacheKey, ttl, jsonData);
+    await updateCacheStats(client, cacheKey, 'set', ttl);
     logger.debug(`✓ Cached: ${cacheKey} (TTL: ${ttl}s)`);
   } catch (error) {
     logger.debug(`Failed to cache ${cacheKey}:`, error.message);
@@ -171,8 +172,20 @@ async function invalidateCacheKeys(keys) {
     if (keys.length === 0) return;
 
     for (const key of keys) {
-      await client.del(key);
-      logger.debug(`✓ Invalidated cache: ${key}`);
+      if (key.includes('*')) {
+        const matchingKeys = [];
+        for await (const matchingKey of client.scanIterator({ MATCH: key, COUNT: 100 })) {
+          matchingKeys.push(matchingKey);
+        }
+
+        if (matchingKeys.length > 0) {
+          await client.del(matchingKeys);
+        }
+        logger.debug(`✓ Invalidated cache pattern: ${key} (${matchingKeys.length} keys)`);
+      } else {
+        await client.del(key);
+        logger.debug(`✓ Invalidated cache: ${key}`);
+      }
     }
   } catch (error) {
     logger.debug('Failed to invalidate cache:', error.message);
@@ -182,20 +195,29 @@ async function invalidateCacheKeys(keys) {
 /**
  * Update cache statistics
  */
-async function updateCacheStats(client, cacheKey, type) {
+async function updateCacheStats(client, cacheKey, type, ttl = null) {
   try {
-    const statsKey = 'cache:stats';
+    const aggregateStatsKey = 'cache:stats';
+    const keyStatsKey = `cache_stats:${cacheKey}`;
     
     if (type === 'hit') {
-      await client.hIncrBy(statsKey, 'total_hits', 1);
-      await client.hSet(statsKey, 'last_hit', new Date().toISOString());
+      await client.hIncrBy(aggregateStatsKey, 'total_hits', 1);
+      await client.hIncrBy(keyStatsKey, 'hits', 1);
+      await client.hSet(aggregateStatsKey, 'last_hit', new Date().toISOString());
     } else if (type === 'miss') {
-      await client.hIncrBy(statsKey, 'total_misses', 1);
-      await client.hSet(statsKey, 'last_miss', new Date().toISOString());
+      await client.hIncrBy(aggregateStatsKey, 'total_misses', 1);
+      await client.hIncrBy(keyStatsKey, 'misses', 1);
+      await client.hSet(aggregateStatsKey, 'last_miss', new Date().toISOString());
+    } else if (type === 'set') {
+      await client.hSet(keyStatsKey, 'ttl_seconds', String(ttl || 300));
+      await client.hSet(keyStatsKey, 'last_updated', Date.now().toString());
     }
 
-    // Set TTL on stats
-    await client.expire(statsKey, 86400);
+    await client.hSet(keyStatsKey, 'last_accessed', Date.now().toString());
+
+    // Set TTL on stats.
+    await client.expire(aggregateStatsKey, 86400);
+    await client.expire(keyStatsKey, 86400);
   } catch (error) {
     logger.debug('Failed to update cache stats:', error.message);
   }

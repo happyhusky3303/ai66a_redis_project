@@ -285,11 +285,16 @@
         const data = await adminFetch('/users?limit=50');
         const html = (data.users || []).map(user => `
           <tr>
-            <td>${user.username}</td>
+            <td>
+              <strong>${user.username}</strong>
+              <div style="font-size: 12px; color: #7f8c8d;">${user.full_name || user.role || 'user'}</div>
+            </td>
             <td>${user.email}</td>
-            <td>0</td>
+            <td><strong>${user.vote_count || user.voteCount || 0}</strong></td>
             <td>${new Date(user.created_at).toLocaleDateString()}</td>
-            <td></td>
+            <td>
+              <span class="status-badge ${user.role === 'admin' ? 'status-warning' : 'status-ok'}">${user.role || 'user'}</span>
+            </td>
           </tr>
         `).join('');
         document.querySelector('#usersTable tbody').innerHTML = html ||
@@ -441,8 +446,11 @@
       const email = document.getElementById('userEmail').value;
 
       try {
-        // TODO: Add API endpoint for creating user
-        alert('User creation endpoint needed');
+        await adminFetch('/user', {
+          method: 'POST',
+          body: JSON.stringify({ username, email })
+        });
+        alert('User saved successfully. Default password: Legacy@123');
         closeModal('userModal');
         document.getElementById('userUsername').value = '';
         document.getElementById('userEmail').value = '';

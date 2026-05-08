@@ -142,22 +142,35 @@ class CacheLayer {
   async getAllCacheStats() {
     try {
       const client = this.redis || getRedisClient();
-      const keys = await client.keys('cache_stats:*');
+      const statKeys = await client.keys('cache_stats:*');
+      const cacheKeys = (await client.keys('cache:*'))
+        .filter((key) => key !== 'cache:stats');
+      const allCacheKeys = new Set([
+        ...statKeys.map((key) => key.replace('cache_stats:', '')),
+        ...cacheKeys
+      ]);
 
       const stats = [];
-      for (const key of keys) {
-        const stat = await client.hGetAll(key);
+      for (const cacheKey of allCacheKeys) {
+        const stat = await client.hGetAll(`cache_stats:${cacheKey}`);
+        const ttl = await client.ttl(cacheKey);
+        const exists = await client.exists(cacheKey);
+
         stats.push({
-          key: key.replace('cache_stats:', ''),
+          key: cacheKey,
           hits: parseInt(stat.hits) || 0,
           misses: parseInt(stat.misses) || 0,
-          ttl: parseInt(stat.ttl_seconds) || null,
+          ttl: ttl >= 0 ? ttl : (parseInt(stat.ttl_seconds) || null),
+          exists: exists === 1,
           lastAccessed: stat.last_accessed,
           lastUpdated: stat.last_updated
         });
       }
 
-      return stats;
+      return stats.sort((a, b) => {
+        if (a.exists !== b.exists) return a.exists ? -1 : 1;
+        return a.key.localeCompare(b.key);
+      });
     } catch (error) {
       logger.error('Failed to get cache stats:', error);
       return [];

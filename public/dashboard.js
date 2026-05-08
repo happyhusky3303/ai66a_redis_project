@@ -104,16 +104,26 @@ async function updateRateLimitStatus() {
 
     const data = await response.json();
     const rateLimitInfo = data.rateLimitInfo || {};
+    const maxRequests = rateLimitInfo.maxRequests || 100;
+    const windowSeconds = rateLimitInfo.windowSeconds || 60;
+    const used = rateLimitInfo.used ?? rateLimitInfo.allowed ?? 0;
+    const remaining = rateLimitInfo.remaining ?? Math.max(maxRequests - used, 0);
+    const blocked = rateLimitInfo.blocked || 0;
+    const retryAfter = rateLimitInfo.retryAfter || rateLimitInfo.resetIn || 0;
 
-    document.getElementById('maxRequests').textContent = '100';
-    document.getElementById('requestsUsed').textContent = `${rateLimitInfo.allowed || 0}/100`;
-    document.getElementById('blocked').textContent = rateLimitInfo.blocked || 0;
-    document.getElementById('ttl').textContent = `${rateLimitInfo.retryAfter || '--'}s`;
+    document.getElementById('maxRequests').textContent = `${maxRequests}/${windowSeconds}s`;
+    document.getElementById('requestsUsed').textContent = `${used}/${maxRequests}`;
+    document.getElementById('blocked').textContent = blocked;
+    document.getElementById('ttl').textContent = retryAfter > 0 ? `${retryAfter}s` : '--';
 
-    const percentage = Math.min(((rateLimitInfo.allowed || 0) / 100) * 100, 100);
+    const percentage = Math.min((used / maxRequests) * 100, 100);
     const progressBar = document.getElementById('progressBar');
     progressBar.style.width = `${percentage}%`;
     progressBar.className = `progress-fill${percentage > 80 ? ' danger' : percentage > 50 ? ' warning' : ''}`;
+
+    const statusEl = document.getElementById('status');
+    statusEl.className = `status-badge ${remaining === 0 ? 'status-warning' : 'status-ok'}`;
+    statusEl.textContent = remaining === 0 ? `LIMIT ${retryAfter || windowSeconds}s` : 'READY';
 
     updateSystemHealth(data);
   } catch (error) {
@@ -232,7 +242,7 @@ async function castVote() {
       return;
     }
 
-    showMessage(`Vote cast! New score: ${data.item?.score ?? 'N/A'}`, 'success');
+    showMessage(data.message || `Vote cast! New score: ${data.item?.score ?? 'N/A'}`, 'success');
     await updateLeaderboard();
     await updateCacheStats();
   } catch (error) {

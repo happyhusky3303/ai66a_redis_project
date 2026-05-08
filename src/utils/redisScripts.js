@@ -86,12 +86,64 @@ class RedisScripts {
     }
   }
 
-  /**
+  async getRateLimitStatus(userId, maxRequests, windowSeconds) {
+    const client = getRedisClient();
+    const key = `rate_limit:${userId}`;
+    const statsKey = `rate_limit_stats:${userId}`;
+    const now = Date.now();
+    const windowMs = windowSeconds * 1000;
+
+    try {
+      await client.zRemRangeByScore(key, '-inf', now - windowMs);
+
+      const [used, stats, oldestEntries] = await Promise.all([
+        client.zCard(key),
+        client.hGetAll(statsKey),
+        client.zRangeWithScores(key, 0, 0)
+      ]);
+
+      let retryAfter = 0;
+      if (oldestEntries.length > 0) {
+        retryAfter = Math.ceil(Math.max((oldestEntries[0].score + windowMs - now) / 1000, 0));
+      }
+
+      const blocked = parseInt(stats.blocked || '0', 10);
+      const remaining = Math.max(maxRequests - used, 0);
+
+      return {
+        maxRequests,
+        windowSeconds,
+        used,
+        allowed: used,
+        blocked,
+        remaining,
+        retryAfter,
+        resetIn: retryAfter,
+        timestamp: now
+      };
+    } catch (error) {
+      logger.error('Rate limit status error:', error);
+      return {
+        maxRequests,
+        windowSeconds,
+        used: 0,
+        allowed: 0,
+        blocked: 0,
+        remaining: maxRequests,
+        retryAfter: 0,
+        resetIn: 0,
+        timestamp: now,
+        error: true
+      };
+    }
+  }
+
+   /**
    * ATOMIC VOTING SYSTEM
-   * Prevents duplicate votes and race conditions
+   * Allows one vote per user/item and prevents race conditions
    * All operations are atomic - guaranteed consistency
    * 
-   * Returns: { newScore, rank, isNewVote, oldVoteValue }
+   * Returns: { newScore, rank, isNewVote, oldVoteValue, userItemVotes, voteIncrement }
    */
   async vote(userId, itemId, voteValue = 1) {
     const client = getRedisClient();
@@ -115,6 +167,8 @@ class RedisScripts {
         rank: result[1],
         isNewVote: result[2],
         oldVoteValue: result[3],
+        userItemVotes: result[4],
+        voteIncrement: voteValue,
         timestamp: now
       };
     } catch (error) {
