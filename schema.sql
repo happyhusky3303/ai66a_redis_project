@@ -55,14 +55,16 @@ CREATE TABLE IF NOT EXISTS api_logs (
 -- ============================================================================
 -- Rate Limit Stats Table
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS rate_limit_stats (
+CREATE TABLE rate_limit_stats (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id VARCHAR(100) NOT NULL,
+    window_start TIMESTAMP NOT NULL,
+    window_end TIMESTAMP NOT NULL,
     requests_allowed INT DEFAULT 0,
     requests_blocked INT DEFAULT 0,
-    window_reset_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_user_window UNIQUE (user_id, window_start, window_end)
 );
 
 -- ============================================================================
