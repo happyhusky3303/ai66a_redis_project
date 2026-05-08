@@ -224,13 +224,19 @@
 
     .vote-form {
       display: flex;
+      flex-direction: column;
       gap: 10px;
-      margin-top: 20px;
+      margin-top: 15px;
     }
 
-    .vote-form input,
+    .vote-form label {
+      font-size: 14px;
+      color: #555;
+      font-weight: 600;
+    }
+
     .vote-form select {
-      flex: 1;
+      width: 100%;
       padding: 8px;
       border: 1px solid #ddd;
       border-radius: 4px;
@@ -410,7 +416,9 @@
             <span class="metric-value" id="ttl">--</span>
           </div>
         </div>
-        <button class="button" id="changeUserButton">Change User</button>
+        <div style="font-size: 12px; color: #666; margin-top: 10px;">
+          Bound to logged-in user
+        </div>
       </div>
 
       <!-- Cache Inspector -->
@@ -441,10 +449,12 @@
       <!-- Voting System -->
       <div class="card">
         <h2>🗳️ Voting System</h2>
-        <div style="display: flex; gap: 10px; margin-top: 15px;">
-          <input type="text" id="userId" placeholder="User ID" value="user1" style="flex: 1; min-width: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-          <input type="text" id="itemId" placeholder="Item ID" value="item1" style="flex: 1; min-width: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-          <button class="button" id="castVoteButton" style="background: #4caf50; white-space: nowrap;">Cast Vote</button>
+        <div class="vote-form">
+          <label for="voteItemId">Choose an option to vote:</label>
+          <select id="voteItemId">
+            <option value="">Loading options...</option>
+          </select>
+          <button class="button" id="castVoteButton" style="background: #4caf50;">Cast Vote</button>
         </div>
         <div id="voteStatus" style="margin-top: 10px;"></div>
       </div>
