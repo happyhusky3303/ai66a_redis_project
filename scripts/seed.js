@@ -87,17 +87,11 @@ const seedDatabase = async () => {
     // Create sample items
     const items = [];
     const itemTitles = [
-      'Best Backend Framework',
-      'Fastest Database',
-      'Most Popular Language',
-      'Best API Gateway',
-      'Top Cache Solution',
-      'Best Message Queue',
-      'Most Reliable Storage',
-      'Best Monitoring Tool',
-      'Top Load Balancer',
-      'Best Testing Framework'
-    ];
+      'Nguyen',
+      'Hoa',
+      'Phong',
+      'An',
+    ]
 
     for (const title of itemTitles) {
       const existingItem = await query(

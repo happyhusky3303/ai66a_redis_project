@@ -3,7 +3,7 @@ const { getRedisClient } = require('../services/redis');
 const { query } = require('../services/postgres');
 const cacheLayer = require('../services/cache');
 const logger = require('../utils/logger');
-const { verifyToken, getBearerToken } = require('../services/auth');
+const { verifyToken, getBearerToken, hashPassword } = require('../services/auth');
 
 const router = express.Router();
 
@@ -162,19 +162,22 @@ router.get('/cache/stats', async (req, res, next) => {
     const stats = await cacheLayer.getAllCacheStats();
     const client = getRedisClient();
     const memoryInfo = await client.info('memory');
+    const totalHits = stats.reduce((sum, s) => sum + (s.hits || 0), 0);
+    const totalMisses = stats.reduce((sum, s) => sum + (s.misses || 0), 0);
+    const totalRequests = totalHits + totalMisses;
+    const activeKeys = stats.filter((entry) => entry.exists !== false).length;
 
     res.json({
       success: true,
       cacheStats: stats,
       memory: memoryInfo,
       summary: {
-        totalKeys: stats.length,
-        totalHits: stats.reduce((sum, s) => sum + s.hits, 0),
-        totalMisses: stats.reduce((sum, s) => sum + s.misses, 0),
-        hitRate: stats.length > 0
-          ? ((stats.reduce((sum, s) => sum + s.hits, 0) /
-              (stats.reduce((sum, s) => sum + s.hits + s.misses, 0) || 1)) * 100).toFixed(2) + '%'
-          : '0%'
+        totalKeys: activeKeys,
+        totalHits,
+        totalMisses,
+        hitRate: totalRequests > 0
+          ? `${((totalHits / totalRequests) * 100).toFixed(2)}%`
+          : '0.00%'
       }
     });
   } catch (error) {
@@ -295,9 +298,20 @@ router.get('/users', async (req, res, next) => {
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
     const result = await query(
-      `SELECT id, username, email, created_at, updated_at
-       FROM users
-       ORDER BY created_at DESC
+      `SELECT
+         u.id,
+         u.username,
+         u.email,
+         u.full_name,
+         u.role,
+         u.last_login_at,
+         u.created_at,
+         u.updated_at,
+         COUNT(v.id)::int AS vote_count
+       FROM users u
+       LEFT JOIN votes v ON v.user_id = u.id
+       GROUP BY u.id
+       ORDER BY u.created_at DESC
        LIMIT $1 OFFSET $2`,
       [limit, offset]
     );
@@ -319,6 +333,47 @@ router.get('/users', async (req, res, next) => {
 });
 
 /**
+ * POST /admin/api/user
+ * Create a user from the admin panel.
+ */
+router.post('/user', async (req, res, next) => {
+  try {
+    const username = String(req.body.username || '').trim().toLowerCase();
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const fullName = String(req.body.fullName || '').trim() || null;
+    const role = req.body.role === 'admin' ? 'admin' : 'user';
+    const password = req.body.password || process.env.DEFAULT_USER_PASSWORD || 'Legacy@123';
+
+    if (!username || !email) {
+      return res.status(400).json({ error: 'username and email are required' });
+    }
+
+    const result = await query(
+      `INSERT INTO users (username, email, password_hash, full_name, role)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (username) DO UPDATE SET
+         email = EXCLUDED.email,
+         full_name = EXCLUDED.full_name,
+         role = EXCLUDED.role,
+         password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash),
+         updated_at = CURRENT_TIMESTAMP
+       RETURNING id, username, email, full_name, role, last_login_at, created_at, updated_at`,
+      [username, email, hashPassword(password), fullName, role]
+    );
+
+    res.status(201).json({
+      success: true,
+      user: {
+        ...result.rows[0],
+        vote_count: 0
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /admin/api/user/:userId
  * Get user details
  */
@@ -327,7 +382,9 @@ router.get('/user/:userId', async (req, res, next) => {
     const { userId } = req.params;
 
     const userResult = await query(
-      'SELECT id, username, email, created_at, updated_at FROM users WHERE id = $1',
+      `SELECT id, username, email, full_name, role, last_login_at, created_at, updated_at
+       FROM users
+       WHERE id = $1`,
       [userId]
     );
 

@@ -6,22 +6,21 @@
  * Core business logic for the voting system
  * 
  * Handles:
- * - Vote casting with Redis atomicity
+ * - One vote per user/item
  * - Real-time leaderboard updates
  * - PostgreSQL durability sync
  * - Cache invalidation
  * 
  * Architecture:
- * 1. Redis (real-time processing via Lua scripts)
- * 2. PostgreSQL (durability/ACID)
+ * 1. PostgreSQL (one-vote enforcement)
+ * 2. Redis (real-time leaderboard cache)
  * 3. MongoDB (asynchronous logging)
  * 4. Cache (invalidation on updates)
  * ═════════════════════════════════════════════════════════════════════════
  */
 
 const { query } = require('./postgres');
-const { cacheResponse, invalidateCacheKeys } = require('../middleware/cacheLayer');
-const redisScripts = require('../utils/redisScripts');
+const { invalidateCacheKeys } = require('../middleware/cacheLayer');
 const { getRedisClient } = require('./redis');
 const { logRequest } = require('./mongodb');
 const logger = require('../utils/logger');
@@ -30,10 +29,9 @@ class VotingService {
   /**
    * STEP 1: RATE LIMITING (Handled by middleware)
    * STEP 2: CACHE CHECK (Handled by middleware)
-   * STEP 3: VOTING LOGIC - Cast or update a vote
+   * STEP 3: VOTING LOGIC - Cast a single vote per user/item
    * 
-   * - Atomically execute via Lua script
-   * - Prevent duplicate votes
+   * - Enforce one vote per user/item in PostgreSQL
    * - Update leaderboard in real-time
    * - Sync to PostgreSQL
    * - Invalidate caches
@@ -68,15 +66,13 @@ class VotingService {
         throw error;
       }
 
-      // ─────────────── EXECUTE VOTING IN REDIS (ATOMIC) ───────────────
-      // Uses Lua script to ensure atomicity and prevent race conditions
-      const voteResult = await redisScripts.vote(userId, itemId, voteValue);
-
-      logger.debug(`✓ Vote processed in Redis: ${userId} -> ${itemId} (score: ${voteResult.newScore})`);
-
       // ─────────────── SYNC TO POSTGRESQL ───────────────
-      // Uses UPSERT to handle both new votes and updates
-      await this.syncVoteToPostgres(userId, itemId, voteValue);
+      // PostgreSQL unique(user_id, item_id) is the source of truth for one-vote rules.
+      const redisScoreBeforeVote = await this.getRedisVoteTotal(itemId);
+      const persistedVote = await this.syncVoteToPostgres(userId, itemId, voteValue, redisScoreBeforeVote);
+      const itemScore = parseInt(persistedVote.item_score || 0, 10);
+      const isNewVote = persistedVote.is_new_vote === true;
+      const rank = await this.syncRedisVoteState(userId, itemId, itemScore);
 
       // ─────────────── INVALIDATE CACHES ───────────────
       // Remove cached rankings and item details
@@ -86,32 +82,38 @@ class VotingService {
         `cache:/api/ranking:*`
       ];
       
-      invalidateCacheKeys(keysToInvalidate).catch(err =>
-        logger.debug('Cache invalidation failed:', err.message)
-      );
+      try {
+        await invalidateCacheKeys(keysToInvalidate);
+      } catch (err) {
+        logger.debug('Cache invalidation failed:', err.message);
+      }
 
       // ─────────────── PREPARE RESPONSE ───────────────
       const responseTime = Date.now() - startTime;
+      const voteMessage = isNewVote
+        ? `1 vote recorded. Total: ${itemScore} votes.`
+        : `You already voted for this person. Total: ${itemScore} votes.`;
 
       const response = {
         success: true,
         statusCode: 200,
+        message: voteMessage,
         vote: {
           voteId: `${userId}:${itemId}`,
           userId,
           itemId,
-          voteValue,
+          voteValue: isNewVote ? voteValue : 0,
           timestamp: new Date().toISOString()
         },
         item: {
           id: itemId,
-          score: voteResult.newScore,
-          rank: voteResult.rank
+          score: itemScore,
+          rank
         },
         voting: {
-          isNew: voteResult.isNewVote === 1,
-          previousValue: voteResult.oldVoteValue || null,
-          change: voteResult.isNewVote === 1 ? voteValue : (voteValue - (voteResult.oldVoteValue || 0))
+          isNew: isNewVote,
+          alreadyVoted: !isNewVote,
+          voteIncrement: isNewVote ? voteValue : 0
         },
         responseTime
       };
@@ -126,10 +128,10 @@ class VotingService {
         statusCode: 200,
         action: 'vote',
         itemId,
-        voteValue,
+        voteValue: isNewVote ? voteValue : 0,
         responseTime,
-        newScore: voteResult.newScore,
-        rank: voteResult.rank
+        newScore: itemScore,
+        rank
       }).catch(err => logger.debug('Failed to log vote to MongoDB:', err.message));
 
       return response;
@@ -291,20 +293,44 @@ class VotingService {
   }
 
   /**
-   * INTERNAL: Sync vote to PostgreSQL for durability
-   * Uses UPSERT (INSERT ON CONFLICT) for idempotency
+   * INTERNAL: Persist a vote once.
+   * PostgreSQL UNIQUE(user_id, item_id) prevents duplicate votes.
    */
-  async syncVoteToPostgres(userId, itemId, voteValue) {
+  async syncVoteToPostgres(userId, itemId, voteValue, redisScoreBeforeVote = 0) {
     try {
       const result = await query(
-        `INSERT INTO votes (user_id, item_id, vote_value) 
-         VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, item_id) 
-         DO UPDATE SET 
-           vote_value = EXCLUDED.vote_value, 
-           updated_at = CURRENT_TIMESTAMP
-         RETURNING id, vote_value`,
-        [userId, itemId, voteValue]
+        `WITH saved_vote AS (
+           INSERT INTO votes (user_id, item_id, vote_value) 
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, item_id) DO NOTHING
+           RETURNING id, vote_value
+         ),
+         updated_item AS (
+           UPDATE items
+           SET score = GREATEST(COALESCE(score, 0) + $3, $4 + $3),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2
+             AND EXISTS (SELECT 1 FROM saved_vote)
+           RETURNING score
+         ),
+         current_vote AS (
+           SELECT id, vote_value
+           FROM votes
+           WHERE user_id = $1 AND item_id = $2
+         ),
+         current_item AS (
+           UPDATE items
+           SET score = GREATEST(COALESCE(score, 0), $4)
+           WHERE id = $2
+             AND NOT EXISTS (SELECT 1 FROM saved_vote)
+           RETURNING score
+         )
+         SELECT
+           COALESCE((SELECT id FROM saved_vote), (SELECT id FROM current_vote)) AS id,
+           COALESCE((SELECT vote_value FROM saved_vote), (SELECT vote_value FROM current_vote)) AS vote_value,
+           COALESCE((SELECT score FROM updated_item), (SELECT score FROM current_item)) AS item_score,
+           EXISTS (SELECT 1 FROM saved_vote) AS is_new_vote`,
+        [userId, itemId, voteValue, redisScoreBeforeVote]
       );
 
       logger.debug(`✓ Vote synced to PostgreSQL: ${result.rows[0].id}`);
@@ -312,6 +338,40 @@ class VotingService {
     } catch (error) {
       logger.error('PostgreSQL sync error:', error);
       throw error;
+    }
+  }
+
+  async getRedisVoteTotal(itemId) {
+    try {
+      const client = getRedisClient();
+      const score = await client.hGet(`votes:${itemId}`, 'total');
+      return parseInt(score || '0', 10);
+    } catch (error) {
+      logger.debug(`Redis vote total read failed for ${itemId}: ${error.message}`);
+      return 0;
+    }
+  }
+
+  async syncRedisVoteState(userId, itemId, itemScore) {
+    try {
+      const client = getRedisClient();
+      const score = parseInt(itemScore || 0, 10);
+
+      await client.hSet(`votes:${itemId}`, {
+        total: score.toString(),
+        last_updated: Date.now().toString(),
+        updated_by: userId
+      });
+      await client.hSet(`user_votes:${userId}`, itemId, '1');
+      await client.zAdd('leaderboard', [{
+        score,
+        value: String(itemId)
+      }]);
+      const rank = await client.zRevRank('leaderboard', itemId);
+      return rank !== null ? rank + 1 : null;
+    } catch (error) {
+      logger.debug(`Redis vote state sync failed for ${itemId}: ${error.message}`);
+      return null;
     }
   }
 

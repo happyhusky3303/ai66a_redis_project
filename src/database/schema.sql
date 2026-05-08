@@ -1,14 +1,6 @@
 -- ─────────────────── Extensions ──────────────
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- ─────────────────── Drop Tables (FK-safe reverse order) ──────────────
-DROP TABLE IF EXISTS api_logs        CASCADE;
-DROP TABLE IF EXISTS rate_limit_stats CASCADE;
-DROP TABLE IF EXISTS votes            CASCADE;
-DROP TABLE IF EXISTS cache_stats      CASCADE;
-DROP TABLE IF EXISTS items            CASCADE;
-DROP TABLE IF EXISTS users            CASCADE;
-
 -- ─────────────────── Users Table ──────────────
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -55,7 +47,9 @@ CREATE TABLE IF NOT EXISTS rate_limit_stats (
   window_end TIMESTAMP NOT NULL,
   requests_allowed INTEGER NOT NULL,
   requests_blocked INTEGER DEFAULT 0,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT unique_user_window UNIQUE (user_id, window_start, window_end)
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_window ON rate_limit_stats(user_id, window_start, window_end);
