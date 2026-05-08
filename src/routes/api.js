@@ -268,7 +268,9 @@ router.get('/ranking',
       const limit = Math.min(parseInt(req.query.limit) || 10, 100);
       const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
+      console.log(`Getting ranking: limit=${limit}, offset=${offset}`);
       const items = await votingService.getTopItems(limit, offset);
+      console.log(`Ranking result: ${items.length} items`);
 
       res.json({
         success: true,
