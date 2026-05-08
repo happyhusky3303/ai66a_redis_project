@@ -170,9 +170,30 @@ async function invalidateCacheKeys(keys) {
     const client = getRedisClient();
     if (keys.length === 0) return;
 
-    for (const key of keys) {
-      await client.del(key);
-      logger.debug(`✓ Invalidated cache: ${key}`);
+    let totalDeleted = 0;
+
+    for (const keyPattern of keys) {
+      // Check if it's a pattern (contains * or ?)
+      if (keyPattern.includes('*') || keyPattern.includes('?')) {
+        // Find all keys matching the pattern
+        const matchingKeys = await client.keys(keyPattern);
+        if (matchingKeys.length > 0) {
+          const deleted = await client.del(matchingKeys);
+          totalDeleted += deleted;
+          logger.debug(`✓ Invalidated ${deleted} cache keys matching: ${keyPattern}`);
+        }
+      } else {
+        // Exact key match
+        const deleted = await client.del(keyPattern);
+        if (deleted > 0) {
+          totalDeleted += deleted;
+          logger.debug(`✓ Invalidated cache: ${keyPattern}`);
+        }
+      }
+    }
+
+    if (totalDeleted > 0) {
+      logger.debug(`Total cache keys invalidated: ${totalDeleted}`);
     }
   } catch (error) {
     logger.debug('Failed to invalidate cache:', error.message);
