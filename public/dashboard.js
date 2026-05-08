@@ -4,11 +4,64 @@ let userId = localStorage.getItem('userId') || 'user1';
 let simulationRunning = false;
 let dashboardInitialized = false;
 const API_BASE = window.location.origin;
+const AUTH_TOKEN = localStorage.getItem('authToken') || '';
+let authUser = null;
 const HEALTH_REFRESH_MS = 5000;
 const DATA_REFRESH_MS = 15000;
 let healthTimer = null;
 let dataTimer = null;
 let refreshing = false;
+
+function logoutUser() {
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('authUser');
+  localStorage.removeItem('userId');
+  window.location.href = '/';
+}
+
+function renderCurrentUser() {
+  try {
+    const raw = localStorage.getItem('authUser');
+    authUser = raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    authUser = null;
+  }
+
+  const userLabel = document.getElementById('currentUserLabel');
+  if (userLabel) {
+    userLabel.textContent = authUser?.username || userId || '--';
+  }
+}
+
+async function ensureUserRole() {
+  const response = await fetch(`${API_BASE}/auth/me`, {
+    headers: { Authorization: `Bearer ${AUTH_TOKEN}` }
+  });
+
+  if (!response.ok) {
+    logoutUser();
+    return false;
+  }
+
+  const data = await response.json();
+  if (!data?.success || !data.user) {
+    logoutUser();
+    return false;
+  }
+
+  if (data.user.role === 'admin') {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('authUser');
+    localStorage.removeItem('userId');
+    window.location.href = '/admin';
+    return false;
+  }
+
+  localStorage.setItem('authUser', JSON.stringify(data.user));
+  userId = data.user.username;
+  localStorage.setItem('userId', userId);
+  return true;
+}
 
 function showMessage(text, type = 'info') {
   const el = document.getElementById('message');
@@ -115,7 +168,7 @@ async function updateCacheStats() {
 async function castVote() {
   try {
     const voteUserId = document.getElementById('userId').value || 'user1';
-    const voteItemId = document.getElementById('itemId').value || 'item1';
+    const voteItemId = document.getElementById('itemId').value;
 
     if (!voteUserId.trim() || !voteItemId.trim()) {
       showMessage('User ID and Item ID are required', 'error');
@@ -279,6 +332,14 @@ async function autoRefresh() {
 
 async function initDashboard() {
   if (dashboardInitialized) return;
+  if (!AUTH_TOKEN) {
+    window.location.href = '/';
+    return;
+  }
+
+  const validRole = await ensureUserRole();
+  if (!validRole) return;
+
   dashboardInitialized = true;
 
   const changeUserButton = document.getElementById('changeUserButton');
@@ -286,17 +347,21 @@ async function initDashboard() {
   const castVoteButton = document.getElementById('castVoteButton');
   const refreshLeaderboardButton = document.getElementById('refreshLeaderboardButton');
   const simButton = document.getElementById('simButton');
+  const logoutButton = document.getElementById('logoutButton');
 
   changeUserButton?.addEventListener('click', changeUser);
   refreshCacheButton?.addEventListener('click', updateCacheStats);
   castVoteButton?.addEventListener('click', castVote);
   refreshLeaderboardButton?.addEventListener('click', updateLeaderboard);
   simButton?.addEventListener('click', startSpamSimulator);
+  logoutButton?.addEventListener('click', logoutUser);
 
+  renderCurrentUser();
   updateTimestamp();
   setInterval(updateTimestamp, 1000);
 
   try {
+    await loadAvailableItems(); // Load items for voting form
     await autoRefresh();
     showMessage(`Welcome! User: ${userId}`, 'success');
   } catch (error) {

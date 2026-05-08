@@ -1,14 +1,7 @@
 const winston = require('winston');
 const path = require('path');
-const fs = require('fs');
 
-// Resolve logs directory relative to project root (3 levels up from src/utils/)
 const logsDir = path.join(__dirname, '../../logs');
-
-// Ensure logs directory exists before creating transports
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
 
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
@@ -40,5 +33,11 @@ const logger = winston.createLogger({
     })
   ]
 });
+
+// Ensure logs directory exists
+const fs = require('fs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
 
 module.exports = logger;

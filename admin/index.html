@@ -88,6 +88,7 @@
     .header-actions {
       display: flex;
       gap: 10px;
+      align-items: center;
     }
 
     .button {
@@ -403,6 +404,8 @@
       <header>
         <h1 id="sectionTitle">Dashboard</h1>
         <div class="header-actions">
+          <span id="adminIdentity" style="font-size: 13px; color: #64748b;">--</span>
+          <button class="button danger" id="adminLogoutButton">Logout</button>
           <button class="button" id="refreshSectionButton">🔄 Refresh</button>
         </div>
       </header>

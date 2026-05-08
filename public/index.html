@@ -152,6 +152,19 @@
       background: #e53935;
     }
 
+    .header-actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .button.small {
+      margin-top: 0;
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+
     .spinner {
       display: inline-block;
       width: 16px;
@@ -362,7 +375,11 @@
       <div class="header-info">
         <span>Status: <span class="status-badge status-ok" id="status">READY</span></span>
         <span>Users Online: <strong id="usersOnline">0</strong></span>
+        <span>Signed in: <strong id="currentUserLabel">--</strong></span>
         <span>Last Updated: <strong id="lastUpdated">--:--:--</strong></span>
+        <div class="header-actions">
+          <button class="button secondary small" id="logoutButton">Logout</button>
+        </div>
       </div>
     </header>
 

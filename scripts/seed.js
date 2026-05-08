@@ -1,6 +1,7 @@
 const dotenv = require('dotenv');
 const { initPostgres, query } = require('../src/services/postgres');
 const { initRedisClient, getRedisClient } = require('../src/services/redis');
+const { hashPassword } = require('../src/services/auth');
 const logger = require('../src/utils/logger');
 
 dotenv.config();
@@ -11,19 +12,77 @@ const seedDatabase = async () => {
     await initPostgres();
     await initRedisClient();
 
+    const defaultUserPassword = process.env.DEFAULT_USER_PASSWORD || 'Legacy@123';
+    const defaultAdminPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'Admin@123';
+    const defaultUserHash = hashPassword(defaultUserPassword);
+    const defaultAdminHash = hashPassword(defaultAdminPassword);
+
+    await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT');
+    await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(120)');
+    await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user'");
+    await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP');
+
+    // Create / update dedicated admin account
+    await query(
+      `INSERT INTO users (username, email, password_hash, full_name, role)
+       VALUES ($1, $2, $3, $4, 'admin')
+       ON CONFLICT (username)
+       DO UPDATE SET
+         email = EXCLUDED.email,
+         password_hash = EXCLUDED.password_hash,
+         full_name = EXCLUDED.full_name,
+         role = 'admin',
+         updated_at = CURRENT_TIMESTAMP`,
+      ['admin_master', 'admin_master@voting.local', defaultAdminHash, 'System Administrator']
+    );
+
     // Create sample users
-    const users = [];
+    const seedUsers = [];
     for (let i = 1; i <= 10; i++) {
+      seedUsers.push({
+        username: `user${i}`,
+        email: `user${i}@example.com`,
+        fullName: `Demo User ${i}`
+      });
+    }
+    seedUsers.push(
+      { username: 'hoa_demo', email: 'hoa_demo@example.com', fullName: 'Hoa Demo' },
+      { username: 'tranvanc', email: 'tranvanc@example.com', fullName: 'Tran Van C' },
+      { username: 'lethib', email: 'lethib@example.com', fullName: 'Le Thi B' },
+      { username: 'nguyenvana', email: 'nguyenvana@example.com', fullName: 'Nguyen Van A' }
+    );
+
+    const users = [];
+    for (const user of seedUsers) {
       const result = await query(
-        `INSERT INTO users (username, email) 
-         VALUES ($1, $2)
-         ON CONFLICT (username) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+        `INSERT INTO users (username, email, password_hash, full_name, role) 
+         VALUES ($1, $2, $3, $4, 'user')
+         ON CONFLICT (username) DO UPDATE SET
+           email = EXCLUDED.email,
+           password_hash = EXCLUDED.password_hash,
+           full_name = EXCLUDED.full_name,
+           role = 'user',
+           updated_at = CURRENT_TIMESTAMP
          RETURNING id`,
-        [`user${i}`, `user${i}@example.com`]
+        [user.username, user.email, defaultUserHash, user.fullName]
       );
       users.push(result.rows[0].id);
     }
-    logger.info(`Created ${users.length} sample users`);
+    logger.info(`Created/updated ${users.length} sample users`);
+
+    // Force all non-admin users to user role and ensure they can login.
+    await query(
+      `UPDATE users
+       SET role = 'user',
+           password_hash = COALESCE(password_hash, $1),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE username <> 'admin_master'`,
+      [defaultUserHash]
+    );
+
+    logger.info('Seeded auth data:');
+    logger.info(`  - Admin account: admin_master / ${defaultAdminPassword}`);
+    logger.info(`  - Default user password: ${defaultUserPassword}`);
 
     // Create sample items
     const items = [];

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - Rate Limiting Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #4f46e5, #0ea5e9);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      color: #1e293b;
+    }
+    .card {
+      width: 100%;
+      max-width: 420px;
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 20px 50px rgba(15, 23, 42, 0.25);
+      padding: 28px;
+    }
+    .title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      color: #64748b;
+      margin-bottom: 20px;
+      font-size: 14px;
+    }
+    .tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .tab-btn {
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      color: #334155;
+      border-radius: 8px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .tab-btn.active {
+      background: #4f46e5;
+      color: #fff;
+      border-color: #4f46e5;
+    }
+    .form {
+      display: none;
+    }
+    .form.active {
+      display: block;
+    }
+    .field {
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #334155;
+    }
+    input {
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    .submit-btn {
+      width: 100%;
+      margin-top: 4px;
+      border: none;
+      border-radius: 8px;
+      background: #4f46e5;
+      color: #fff;
+      padding: 11px 14px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .message {
+      margin-top: 14px;
+      font-size: 13px;
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: none;
+    }
+    .message.show { display: block; }
+    .message.error { background: #fee2e2; color: #b91c1c; }
+    .message.success { background: #dcfce7; color: #166534; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="title">Account Access</div>
+    <div class="subtitle">Login or create a new user for the dashboard.</div>
+
+    <div class="tabs">
+      <button type="button" class="tab-btn active" id="loginTab">Login</button>
+      <button type="button" class="tab-btn" id="registerTab">Register</button>
+    </div>
+
+    <form id="loginForm" class="form active">
+      <div class="field">
+        <label for="loginIdentifier">Username or Email</label>
+        <input id="loginIdentifier" required placeholder="user1 or user1@mail.com">
+      </div>
+      <div class="field">
+        <label for="loginPassword">Password</label>
+        <input id="loginPassword" type="password" required minlength="8">
+      </div>
+      <button class="submit-btn" type="submit">Sign In</button>
+    </form>
+
+    <form id="registerForm" class="form">
+      <div class="field">
+        <label for="registerFullName">Full Name</label>
+        <input id="registerFullName" placeholder="Nguyen Van A">
+      </div>
+      <div class="field">
+        <label for="registerUsername">Username</label>
+        <input id="registerUsername" required minlength="3" maxlength="30">
+      </div>
+      <div class="field">
+        <label for="registerEmail">Email</label>
+        <input id="registerEmail" type="email" required>
+      </div>
+      <div class="field">
+        <label for="registerPassword">Password</label>
+        <input id="registerPassword" type="password" required minlength="8" maxlength="72">
+      </div>
+      <button class="submit-btn" type="submit">Create Account</button>
+    </form>
+
+    <div id="message" class="message"></div>
+  </div>
+
+  <script src="/public/login.js"></script>
+</body>
+</html>

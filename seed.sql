@@ -1,11 +1,34 @@
 -- Seed data for current schema: users / items / votes
 
+-- Ensure auth columns exist for legacy DBs
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(120);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;
+
 -- Users
-INSERT INTO users (username, email) VALUES
-('nguyenvana', 'nguyenvana@example.com'),
-('lethib', 'lethib@example.com'),
-('tranvanc', 'tranvanc@example.com')
+INSERT INTO users (username, email, full_name, role, password_hash) VALUES
+('nguyenvana', 'nguyenvana@example.com', 'Nguyen Van A', 'user', '3a711fa7cc3ae86ab4f6797b14bd3309:7f7b597bb1f407c45eac68a379fcb930e3aed8e09dec9d2e4e30edd67f0ddf9417a2580733e8a06b9c8cfcbadebad76f4f9b82d1dab1265560a8019b9679486b'),
+('lethib', 'lethib@example.com', 'Le Thi B', 'user', '3a711fa7cc3ae86ab4f6797b14bd3309:7f7b597bb1f407c45eac68a379fcb930e3aed8e09dec9d2e4e30edd67f0ddf9417a2580733e8a06b9c8cfcbadebad76f4f9b82d1dab1265560a8019b9679486b'),
+('tranvanc', 'tranvanc@example.com', 'Tran Van C', 'user', '3a711fa7cc3ae86ab4f6797b14bd3309:7f7b597bb1f407c45eac68a379fcb930e3aed8e09dec9d2e4e30edd67f0ddf9417a2580733e8a06b9c8cfcbadebad76f4f9b82d1dab1265560a8019b9679486b')
 ON CONFLICT (username) DO NOTHING;
+
+-- Dedicated admin account
+INSERT INTO users (username, email, full_name, role, password_hash) VALUES
+('admin_master', 'admin_master@voting.local', 'System Administrator', 'admin', '319a99f8735de116d11470aa24bd7845:1bb34ce14e9de4418bf9aabed6f7bf92ab74b4ad171fe3e598a72c8a4cb8e58da1b0d00691d048b84b3660b8678fb36a820414c45cc652e3cf449e68fef23439')
+ON CONFLICT (username) DO UPDATE
+SET email = EXCLUDED.email,
+    full_name = EXCLUDED.full_name,
+    role = 'admin',
+    password_hash = EXCLUDED.password_hash,
+    updated_at = CURRENT_TIMESTAMP;
+
+-- Ensure existing non-admin users have role=user and default password.
+UPDATE users
+SET role = 'user',
+    password_hash = COALESCE(password_hash, '3a711fa7cc3ae86ab4f6797b14bd3309:7f7b597bb1f407c45eac68a379fcb930e3aed8e09dec9d2e4e30edd67f0ddf9417a2580733e8a06b9c8cfcbadebad76f4f9b82d1dab1265560a8019b9679486b'),
+    updated_at = CURRENT_TIMESTAMP
+WHERE username <> 'admin_master';
 
 -- Items (mapped from old "candidates")
 INSERT INTO items (title, description) VALUES
